@@ -4,6 +4,7 @@ package exer;
 
 import java.util.ArrayList;
 import java.util.Objects;
+import java.util.concurrent.ForkJoinPool;
 
 /**
  * @author 安雪莹
@@ -37,47 +38,35 @@ interface Dao<T>{
  * 现在有一个商品类，该类有id,name,price,description等属性，
  *  * 编写商品管理类实现DAO接口。并测试
  */
-public class Commodity implements Dao<Commodity>{
+public class Commodity {
 
     private int id;
     private String name;
     private String description;
 
-    private ArrayList<Commodity> arrayList = new ArrayList<>();
 
     @Override
-    public void add(Commodity t){
-        arrayList.add(t);
+    public String toString() {
+        return "Commodity{" +
+                "id=" + id +
+                ", name='" + name + '\'' +
+                ", description='" + description + '\'' +
+                '}';
     }
 
     @Override
-    public void modify(int id, Commodity t){
-        arrayList.set(id,t);
-    }
-
-
-    @Override
-    public Commodity get(int id){
-        return arrayList.get(id);
-    }
-
-    @Override
-    public void delete(int id){
-        arrayList.remove(id);
+    public boolean equals(Object o) {
+        if (this == o) {return true;}
+        if (o == null || getClass() != o.getClass()) {return false;}
+        Commodity commodity = (Commodity) o;
+        return id == commodity.id &&
+                name.equals(commodity.name) &&
+                description.equals(commodity.description);
     }
 
     @Override
-    public ArrayList<Commodity> getAllList(){
-        ArrayList<Commodity> temp = new ArrayList<>(arrayList.size());
-        for (int i = 0; i < arrayList.size(); i++) {
-            temp.add(arrayList.get(i));
-        }
-        return temp;
-    }
-
-    @Override
-    public int size(){
-        return arrayList.size();
+    public int hashCode() {
+        return Objects.hash(id, name, description);
     }
 
     public Commodity(int id, String name, String description) {
@@ -89,56 +78,93 @@ public class Commodity implements Dao<Commodity>{
     public Commodity() {
     }
 
+    public int getId() {
+        return id;
+    }
+
+    public void setId(int id) {
+        this.id = id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+}
+
+
+class CommodityManage implements Dao<Commodity>{
+
+    ArrayList<Commodity> commodities = new ArrayList<>();
+
     @Override
-    public String toString() {
-        return "Commodity{" +
-                "id=" + id +
-                ", name='" + name + '\'' +
-                ", description='" + description + '\'' +
-                ", arrayList=" + arrayList +
-                '}';
+    public void add(Commodity commodity) {
+        commodities.add(commodity);
     }
 
     @Override
-    public boolean equals(Object o) {
-        if (this == o) {return true;}
-        if (o == null || getClass() != o.getClass()) {return false;}
-        Commodity commodity = (Commodity) o;
-        return id == commodity.id &&
-                name.equals(commodity.name) &&
-                description.equals(commodity.description) &&
-                arrayList.equals(commodity.arrayList);
+    public void modify(int id, Commodity commodity) {
+        for (int i = 0; i < commodities.size(); i++) {
+            if(commodities.get(i).getId()==id){
+                 commodities.set(i,commodity);
+            }
+        }
     }
 
     @Override
-    public int hashCode() {
-        return Objects.hash(id, name, description, arrayList);
+    public Commodity get(int id) {
+        for (int i = 0; i < commodities.size(); i++) {
+            try {
+                if(commodities.get(i).getId()==id){
+                    return commodities.get(i);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public void delete(int id) {
+        for (int i = 0; i < commodities.size(); i++) {
+            if(commodities.get(i).getId()==id){
+                commodities.remove(i);
+            }
+        }
+    }
+
+    @Override
+    public ArrayList<Commodity> getAllList() {
+        return commodities;
+    }
+
+    @Override
+    public int size() {
+        return commodities.size();
     }
 }
 
 class Test{
     public static void main(String[] args) {
-        /**
-         *     public void add(T t);
-         *
-         *     public void modify(int id,T t);
-         *
-         *     public T get(int id);
-         *
-         *     public void delete(int id);
-         *
-         *     public ArrayList<T> getAllList();
-         *
-         *     public int size();
-         */
-
-        Commodity commodity = new Commodity();
-        commodity.add(new Commodity(1,"a","a"));
-        commodity.add(new Commodity(2,"a","b"));
-        commodity.add(new Commodity(3,"a","c"));
-
-        System.out.println(commodity.getAllList());
-
-        commodity.modify(1,new Commodity(1,"a","d"));
+        CommodityManage cm = new CommodityManage();
+        cm.add(new Commodity(1, "内衣", "内裤"));
+        cm.add(new Commodity(2, "外衣", "内裤"));
+        cm.modify(1, new Commodity(1, "毛衣", "针织"));
+        System.out.println(cm.get(1));
+        cm.delete(1);
+        System.out.println(cm.size());
+        System.out.println(cm.getAllList());
     }
 }

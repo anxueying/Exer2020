@@ -116,6 +116,7 @@ public class TeamService {
         for (int i = 0; i < total; i++) {
             if (team[i].getMemberId()== memberId) {
                 index = i;
+                team[i].setStatus(Status.FREE);
             }
         }
 
