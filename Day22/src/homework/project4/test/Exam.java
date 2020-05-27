@@ -10,7 +10,7 @@ public class Exam {
 		
 		/*List<String> list = itemSvc.readTextFile("./Items.txt");
 		
-		Iterator<String> it = list.iterator();
+		Iterator<String> it = list.designmode.iterator();
 		
 		while(it.hasNext()){
 			String str = it.next();

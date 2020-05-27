@@ -19,7 +19,7 @@ public class PokerRandom {
         }
         pokers.addAll(Arrays.asList(pokerJokers));
 
-       /* Iterator it = pokers.iterator();
+       /* Iterator it = pokers.designmode.iterator();
         while (it.hasNext()){
             System.out.print(it.next());
         }*/
