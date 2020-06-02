@@ -9,8 +9,15 @@ import java.util.ArrayList;
  */
 public class Solution7 {
     public static void main(String[] args) {
-        //1534236469
-        System.out.println(reverse(1534236469));
+        /**
+         *temp = rev*10+pop
+         *
+         if (rev > INT_MAX/10 || (rev == INT_MAX / 10 && pop > 7)) return 0;
+         if (rev < INT_MIN/10 || (rev == INT_MIN / 10 && pop < -8)) return 0;
+         */
+        System.out.println("Integer.MIN_VALUE/10 = " + Integer.MIN_VALUE / 10);
+        System.out.println("Integer.MAX_VALUE/10 = " + Integer.MAX_VALUE / 10);
+
     }
 
     public static int reverse(int x) {
