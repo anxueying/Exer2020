@@ -1,8 +1,5 @@
 package project.java;
 
-import exer.java.Person;
-import jdk.net.SocketFlow;
-
 import java.util.Objects;
 
 /**
