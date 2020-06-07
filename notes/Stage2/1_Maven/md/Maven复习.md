@@ -64,7 +64,7 @@ Maven如何实现：
 
 自动的从构建过程的起点一直执行到终点（参考构建环节）
 
-### 5. Maven核心概念（第四章）
+### 5. [Maven核心概念](#4. Maven的核心概念)
 
 #### 1)    POM
 
@@ -280,26 +280,27 @@ Tips：~表示当前用户的家目录。
     <plugins>
         <plugin>
             <artifactId>maven-assembly-plugin</artifactId>
+            
             <configuration>
                 <descriptorRefs>
                     <descriptorRef>jar-with-dependencies</descriptorRef>
-                </descriptorRefs>
-              <archive>
+                </descriptorRefs>      
+                <archive>
                     <manifest>
-                     <!-- 指定主类 -->
+                        <!-- 指定主类。会把其依赖的包一起打成jar包-->
                         <mainClass>xxx.xxx.XXX</mainClass>
                     </manifest>
                 </archive>
             </configuration>
+            
             <executions>
-                    <execution>
-                        <id>make-assembly</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>single</goal>
-                        </goals>
-                    </execution>
-
+                <execution>                
+                    <id>make-assembly</id>
+                    <phase>package</phase>
+                    <goals>
+                        <goal>single</goal>
+                    </goals>
+                </execution>
             </executions>
         </plugin>
     </plugins>
@@ -313,6 +314,72 @@ Tips：~表示当前用户的家目录。
 Project Object Model：项目对象模型，Maven工程的核心配置。
 
 学习Maven就是学习pom.xml文件中的配置。
+
+```xml
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"  
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0http://maven.apache.org/xsd/maven-4.0.0.xsd">  
+  
+    <!-- 模型版本。maven2.0必须是这样写，现在是maven2唯一支持的版本 -->  
+    <modelVersion>4.0.0</modelVersion>  
+  
+    <!-- 公司或者组织的唯一标志，并且配置时生成的路径也是由此生成， 如com.winner.trade，maven会将该项目打成的jar包放本地路径：/com/winner/trade -->  
+    <groupId>com.winner.trade</groupId>  
+  
+    <!-- 本项目的唯一ID，一个groupId下面可能多个项目，就是靠artifactId来区分的 -->  
+    <artifactId>trade-core</artifactId>  
+  
+    <!-- 本项目目前所处的版本号 -->  
+    <version>1.0.0-SNAPSHOT</version>  
+  
+    <!-- 打包的机制，如pom,jar, maven-plugin, ejb, war, ear, rar, par，默认为jar -->  
+    <packaging>jar</packaging>  
+  
+    <!-- 帮助定义构件输出的一些附属构件,附属构件与主构件对应，有时候需要加上classifier才能唯一的确定该构件 不能直接定义项目的classifer,因为附属构件不是项目直接默认生成的，而是由附加的插件帮助生成的 -->  
+    <classifier>...</classifier>  
+  
+    <!-- 定义本项目的依赖关系 -->  
+    <dependencies>  
+  
+        <!-- 每个dependency都对应这一个jar包 -->  
+        <dependency>  
+  
+            <!--一般情况下，maven是通过groupId、artifactId、version这三个元素值（俗称坐标）来检索该构件， 然后引入你的工程。如果别人想引用你现在开发的这个项目（前提是已开发完毕并发布到了远程仓库），-->   
+            <!--就需要在他的pom文件中新建一个dependency节点，将本项目的groupId、artifactId、version写入， maven就会把你上传的jar包下载到他的本地 -->  
+            <groupId>com.winner.trade</groupId>  
+            <artifactId>trade-test</artifactId>  
+            <version>1.0.0-SNAPSHOT</version>  
+  
+            <!-- maven认为，程序对外部的依赖会随着程序的所处阶段和应用场景而变化，所以maven中的依赖关系有作用域(scope)的限制。 -->  
+            <!--scope包含如下的取值：compile（编译范围）、provided（已提供范围）、runtime（运行时范围）、test（测试范围）、system（系统范围） -->  
+            <scope>test</scope>  
+  
+            <!-- 设置指依赖是否可选，默认为false,即子项目默认都继承:为true,则子项目必需显示的引入，与dependencyManagement里定义的依赖类似  -->  
+            <optional>false</optional>  
+  
+            <!-- 屏蔽依赖关系。 比如项目中使用的libA依赖某个库的1.0版，libB依赖某个库的2.0版，现在想统一使用2.0版，就应该屏蔽掉对1.0版的依赖 -->  
+            <exclusions>  
+                <exclusion>  
+                    <groupId>org.slf4j</groupId>  
+                    <artifactId>slf4j-api</artifactId>  
+                </exclusion>  
+            </exclusions>  
+  
+        </dependency>  
+  
+    </dependencies>  
+  
+    <!-- 为pom定义一些常量，在pom中的其它地方可以直接引用 使用方式 如下 ：${file.encoding} -->  
+    <properties>  
+        <file.encoding>UTF-8</file.encoding>  
+        <java.source.version>1.8</java.source.version>  
+        <java.target.version>1.8</java.target.version>  
+    </properties>  
+  
+    ...  
+</project> 
+```
+
+
 
 ### 2. 约定的目录结构
 
@@ -593,3 +660,115 @@ deploy将最终的包复制到远程的仓库，以让其它开发人员与项�
 3)    Maven的生命周期与插件目标相互绑定，以完成某个具体的构建任务。
 
 例如：compile就是插件maven-compiler-plugin的一个功能；pre-clean是插件maven-clean-plugin的一个目标。
+
+## 5. 继承
+
+### 1. why 为什么需要继承机制
+
+非compile范围的依赖不能在依赖链传递，多人合作开发时进行项目合并会发生问题。
+
+使用继承机制就可以将这样的依赖信息统一提取到父工程模块中进行统一管理。
+
+### 2. what 继承机制的实现
+
+#### 1. 继承关系的实现
+
+##### 1. 创建父工程
+
+**父工程的打包方式为pom**，父工程只需要保留pom.xml文件即可
+
+```xml
+<groupId>com.atguigu.maven</groupId>
+<artifactId>Parent</artifactId>
+<packaging>pom</packaging>
+<version>1.0-SNAPSHOT</version>
+```
+
+##### 2. 在子工程中引用父工程
+
+```xml
+<!--继承-->
+<parent>
+	<!-- 父工程坐标 -->
+    <groupId>com.atguigu.maven</groupId>
+    <artifactId>Parent</artifactId>
+    <version>1.0-SNAPSHOT</version>
+	<!--指定从当前pom.xml文件出发寻找父工程的pom.xml文件的相对路径-->
+	<relativePath>../Parent/pom.xml</relativePath>
+</parent>
+```
+
+此时如果子工程的groupId和version如果和父工程重复则可以删除。
+
+#### 2. 在父工程中管理依赖
+
+##### 方式1：dependencyManagement标签
+
+dependencies标签，用dependencyManagement标签括起来。
+
+```xml
+<!--依赖管理-->
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.0</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
+```
+
+在子项目中重新指定需要的依赖，删除范围和版本号
+
+```xml
+<dependency>
+    <groupId>junit</groupId>
+    <artifactId>junit</artifactId>
+</dependency>
+```
+
+##### 方式2：不写dependencyManagemen
+
+子项目中什么也不需要写也可有该依赖包。
+
+```xml
+<!--依赖管理-->
+    <dependencies>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.0</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+```
+
+## 6. 聚合
+
+### 1. why 为什么要使用聚合
+
+多个模块逐个安装操作很麻烦，使用聚合可以批量进行安装、清理
+
+### 2. what 怎么实现
+
+总的聚合工程中使用modules/module标签组合
+
+```xml
+<!--聚合，无需考虑先后顺序，添加相对路径即可-->
+<modules>
+    <module>../MakeFriend</module>
+    <module>../OurFriends</module>
+    <module>../HelloFriend</module>
+    <module>../Hello</module>
+</modules>
+```
+
+Maven可以根据各个模块的继承和依赖关系自动选择安装的顺序
+
+## 7. Maven酷站
+
+我们可以到http://mvnrepository.com/搜索需要的jar包的依赖信息。把配置信息粘贴到pox.xml即可（maven会自行从仓库下载）
+
+http://search.maven.org/
