@@ -403,24 +403,24 @@ echo "test.txt" | xargs cat
 
 **配置环境变量**
 
-```
+```shell
 sudo vim /etc/profile.d/my_env.sh
 ```
 
-```
+```shell
 #HADOOP_HOME
 export HADOOP_HOME=/opt/module/hadoop-3.1.3
 export PATH=$PATH:$HADOOP_HOME/bin
 export PATH=$PATH:$HADOOP_HOME/sbin
 ```
 
-```
+```shell
 source /etc/profile
 ```
 
 测试是否安装成功
 
-```
+```shell
 hadoop version
 ```
 
@@ -660,6 +660,8 @@ ssh 另一台电脑的ip地址
 
 ##### 1. 配置免密登录
 
+群起集群需要ssh，单起不需要
+
 ```shell
 $ ssh-keygen -t rsa
 ```
@@ -771,6 +773,10 @@ total size is 0  speedup is 0.00
 
 core-default.xml 默认配置，当修改了core-site.xml后，会优先使用core-site中的配置参数
 
+![image-20200613090750752](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200613090750.png)
+
+根据这里面的默认配置，重新根据自己的需要，配置文件内容。如版本与图中不一致，可导官方文档中查看[对应版本](https://hadoop.apache.org/docs/)的xml内容标签
+
 ![image-20200612142126196](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200612142126.png)
 
 **核心配置文件**
@@ -880,7 +886,15 @@ $ xsync  /opt/module/hadoop-3.1.3/etc/hadoop/
 
 #### 5. 群起集群
 
-初次格式化之后产生的文件夹，只能格式化一次！！如要再次格式化，先删掉data和logs，再格式化！！
+如初次启动，需要格式化NN
+
+```shell
+$ hdfs namenode -format
+```
+
+> - 初次格式化之后产生的文件夹，只能格式化一次！！
+> - 如要再次格式化，一定要先停止上次启动的所有NN和DN进程，然后再删除data和logs，再格式化！！
+> - PS：data和logs不要分发！！不要分发！！不要分发！！
 
 ![image-20200612144253986](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200612144254.png)
 
@@ -971,6 +985,68 @@ hadoop103:
 hadoop102: output中可看到运行结果，也可下载
 
 ![image-20200612224038215](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200612224038.png)
+
+##### 写一个脚本一键群起（停）
+
+```shell
+[atguigu@hadoop102 bin]$ cat mycluster 
+#!/bin/bash
+case $1 in
+"start")
+#dfs  yarn
+ssh hadoop102 start-dfs.sh
+ssh hadoop103 start-yarn.sh
+;;
+"stop")
+# dfs yarn
+ssh hadoop102 stop-dfs.sh
+ssh hadoop103 stop-yarn.sh
+;;
+*)
+echo "args is error! please input start or stop"
+;;
+esac
+[atguigu@hadoop102 bin]$ chmod u+x mycluster
+```
+
+##### jpscall 一键查看集群各机器jps
+
+```shell
+[atguigu@hadoop102 bin]$ cat jpscall 
+#!/bin/bash
+for name in hadoop102 hadoop103 hadoop104
+do
+	echo "=====$name===="	
+	ssh $name jps
+done
+[atguigu@hadoop102 bin]$ chmod u+x jpscall 
+```
+
+**测试两个脚本**
+
+```shell
+[atguigu@hadoop102 bin]$ mycluster stop
+Stopping namenodes on [hadoop102]
+Stopping datanodes
+Stopping secondary namenodes [hadoop104]
+Stopping nodemanagers
+Stopping resourcemanager
+[atguigu@hadoop102 bin]$ jpscall 
+=====hadoop102====
+5618 JobHistoryServer
+8184 Jps
+=====hadoop103====
+7134 Jps
+5023 ApplicationHistoryServer
+=====hadoop104====
+7152 Jps
+[atguigu@hadoop102 bin]$ mycluster start
+Starting namenodes on [hadoop102]
+Starting datanodes
+Starting secondary namenodes [hadoop104]
+Starting resourcemanager
+Starting nodemanagers
+```
 
 #### 6. 集群启动/停止方式总结
 
@@ -1455,3 +1531,1464 @@ at javax.security.auth.Subject.doAs(Subject.java:415)
 \#127.0.0.1  localhost localhost.localdomain localhost4 localhost4.localdomain4
 
 \#::1     hadoop102
+
+# 二、HDFS
+
+## 1. HDFS概述
+
+### 1. 产生背景
+
+问题：数据量大，一个操作系统存不下所有的数据。分配到更多系统的磁盘中，不方便管理和维护。
+
+分布式文件管理系统：一种系统来管理多台机器上的文件
+
+HDFS：分布式文件管理系统中的一种。
+
+Hadoop Distributed File System
+
+- 文件系统：存储文件，目录树定位
+- 分布式：多台机器
+
+使用场景：
+
+- 一次写入，多次读出
+- 不支持文件修改，不适合当网盘
+- 数据分析
+
+### 2. HDFS优缺点
+
+#### 优点
+
+##### 1. 高容错性
+
+1. 数据自动保存多个副本（默认三个）
+2. 某一个副本丢失后，可以自动恢复
+
+##### 2. 适合处理大数据
+
+1. 数据规模：处理数据规模可达GB、TB、PB
+2. 文件规模：处理百万规模以上的文件数量
+
+##### 3. 可构建在廉价机器
+
+#### 缺点
+
+##### 1. 不适合低延时数据访问
+
+毫秒级存储数据（不适合实时，主要负责离线）
+
+##### 2. 无法高效对大量的小文件进行存储
+
+1. 占用NameNode大量的内存存储文件目录和块信息
+2. 寻址时间 > 读取时间，违反HDFS的设计目标
+
+##### 3. 不支持并发写入、文件随机修改
+
+1. 只能有一个写，不允许多线程写
+2. 仅支持数据append（追加），不支持文件的随机修改
+
+### 3. HDFS组成架构
+
+![image-20200613102901609](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200613102901.png)
+
+- Client：客户端，可进行读写操作，都要通过NameNode
+- NameNode：存储元数据，告诉DataNodes在哪个位置
+- 副本（Replication）：两个相同的块
+- 机架（Rack）：存放一台台节点，节点中是一块（Blocks）一块的
+- 完整的文件：多块合在一起
+- 写（write）：先告诉NameNode，分配一个位置，去那个位置写
+- 读（Read）：发出请求，Namenode识别（内部），读取内容
+
+##### 1. NameNode（nn）
+
+就是Master，它是一个主管、管理者
+
+- 管理HDFS的名称空间
+- 配置副本策略：如文件file有300m，切分为100M(1) 200M(2)，如下放置，任一节点挂掉仍可正常读取file
+  - 机器A:(1)
+  - 机器B:(1)(2)
+  - 机器C:(2)
+- 管理数据块（Block）映射信息
+- 处理客户端读写请求
+
+##### 2. DateNode（dn）
+
+就是Slave。NameNode下达命令，DataNode执行实际的操作
+
+- 存储实际的数据块
+- 执行数据块的读/写操作
+
+##### 3. Client
+
+客户端
+
+- 文件切分。文件上传HDFS的时候，Client将文件切分成一个一个的Block，然后进行上传
+- 与NameNode交互，获取文件的位置信息
+- 与DataNode交互，读取或者写入数据
+- Client提供一些命令来管理HDFS，比如NameNode格式化
+- Client可以通过一些命令来访问HDFS，比如对HDFS增删改查操作
+
+##### 4. Secondary NameNode
+
+并非Namenode的热备。当Namenode挂掉时，它并不能马上替换Namenode并提供服务
+
+- 辅助NameNode，分担其工作量
+  - 定期合并Fsimage和Edits，并推送给Namenode
+- 紧急情况下，可辅助恢复Namenode
+
+### 4. HDFS文件块大小（面试重点）
+
+物理上分块存储，默认大小128M(Hadoop2.x版本及其之后的版本)，老版本64M
+
+配置参数：dfs.blocksize
+
+**为什么定为128M呢？**
+
+![image-20200613104822075](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200613104822.png)
+
+**为什么块的大小不能设置太小，也不能设置为太大？**
+
+![image-20200613104914381](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200613104914.png)
+
+## 2. HDFS的Shell操作（开发重点）
+
+### 1. 基本语法
+
+对于操作HDFS来说，以下两个命令完全相同
+
+```shell
+$ bin/hadoop fs 
+$ bin/hdfs dfs
+
+#已设置hadoop环境变量
+$ hadoop fs 
+$ hdfs dfs
+```
+
+
+
+### 2. 命令大全
+
+```shell
+[atguigu@hadoop102 ~]$ hadoop fs
+Usage: hadoop fs [generic options]
+	[-appendToFile <localsrc> ... <dst>]
+	[-cat [-ignoreCrc] <src> ...]
+	[-checksum <src> ...]
+	[-chgrp [-R] GROUP PATH...]
+	[-chmod [-R] <MODE[,MODE]... | OCTALMODE> PATH...]
+	[-chown [-R] [OWNER][:[GROUP]] PATH...]
+	[-copyFromLocal [-f] [-p] [-l] [-d] [-t <thread count>] <localsrc> ... <dst>]
+	[-copyToLocal [-f] [-p] [-ignoreCrc] [-crc] <src> ... <localdst>]
+	[-count [-q] [-h] [-v] [-t [<storage type>]] [-u] [-x] [-e] <path> ...]
+	[-cp [-f] [-p | -p[topax]] [-d] <src> ... <dst>]
+	[-createSnapshot <snapshotDir> [<snapshotName>]]
+	[-deleteSnapshot <snapshotDir> <snapshotName>]
+	[-df [-h] [<path> ...]]
+	[-du [-s] [-h] [-v] [-x] <path> ...]
+	[-expunge]
+	[-find <path> ... <expression> ...]
+	[-get [-f] [-p] [-ignoreCrc] [-crc] <src> ... <localdst>]
+	[-getfacl [-R] <path>]
+	[-getfattr [-R] {-n name | -d} [-e en] <path>]
+	[-getmerge [-nl] [-skip-empty-file] <src> <localdst>]
+	[-head <file>]
+	[-help [cmd ...]]
+	[-ls [-C] [-d] [-h] [-q] [-R] [-t] [-S] [-r] [-u] [-e] [<path> ...]]
+	[-mkdir [-p] <path> ...]
+	[-moveFromLocal <localsrc> ... <dst>]
+	[-moveToLocal <src> <localdst>]
+	[-mv <src> ... <dst>]
+	[-put [-f] [-p] [-l] [-d] <localsrc> ... <dst>]
+	[-renameSnapshot <snapshotDir> <oldName> <newName>]
+	[-rm [-f] [-r|-R] [-skipTrash] [-safely] <src> ...]
+	[-rmdir [--ignore-fail-on-non-empty] <dir> ...]
+	[-setfacl [-R] [{-b|-k} {-m|-x <acl_spec>} <path>]|[--set <acl_spec> <path>]]
+	[-setfattr {-n name [-v value] | -x name} <path>]
+	[-setrep [-R] [-w] <rep> <path> ...]
+	[-stat [format] <path> ...]
+	[-tail [-f] [-s <sleep interval>] <file>]
+	[-test -[defsz] <path>]
+	[-text [-ignoreCrc] <src> ...]
+	[-touch [-a] [-m] [-t TIMESTAMP ] [-c] <path> ...]
+	[-touchz <path> ...]
+	[-truncate [-w] <length> <path> ...]
+	[-usage [cmd ...]]
+
+Generic options supported are:
+-conf <configuration file>        specify an application configuration file
+-D <property=value>               define a value for a given property
+-fs <file:///|hdfs://namenode:port> specify default filesystem URL to use, overrides 'fs.defaultFS' property from configurations.
+-jt <local|resourcemanager:port>  specify a ResourceManager
+-files <file1,...>                specify a comma-separated list of files to be copied to the map reduce cluster
+-libjars <jar1,...>               specify a comma-separated list of jar files to be included in the classpath
+-archives <archive1,...>          specify a comma-separated list of archives to be unarchived on the compute machines
+
+The general command line syntax is:
+command [genericOptions] [commandOptions]
+```
+
+-help：输出这个命令参数
+
+```shell
+#查看rm命令的说明
+[atguigu@hadoop102 ~]$ hadoop fs -help rm
+-rm [-f] [-r|-R] [-skipTrash] [-safely] <src> ... :
+  Delete all files that match the specified file pattern. Equivalent to the Unix
+  command "rm <src>"
+                                                                                 
+  -f          If the file does not exist, do not display a diagnostic message or 
+              modify the exit status to reflect an error.                        
+  -[rR]       Recursively deletes directories.                                   
+  -skipTrash  option bypasses trash, if enabled, and immediately deletes <src>.  
+  -safely     option requires safety confirmation, if enabled, requires          
+              confirmation before deleting large directory with more than        
+              <hadoop.shell.delete.limit.num.files> files. Delay is expected when
+              walking over large directory recursively to count the number of    
+              files to be deleted before the confirmation. 
+```
+
+### 3. 常用命令实操
+
+```shell
+# 查看hdfs中文件列表
+[atguigu@hadoop102 ~]$ hadoop fs -ls /
+```
+
+#### 1. 上传
+
+```shell
+# -moveFromLocal：从本地剪切粘贴到HDFS
+$ touch kongming.txt
+$ hadoop fs  -moveFromLocal  ./kongming.txt  /sanguo/shuguo
+
+# -copyFromLocal：从本地文件系统中拷贝文件到HDFS路径去
+$ hadoop fs -copyFromLocal README.txt /
+
+# -appendToFile：追加一个文件到已经存在的文件末尾
+# 添加内容
+$ touch liubei.txt
+$ vi liubei.txt
+# 追加 注意第一个是本地路径 第二个是hdfs文件的路径（只能本地->hdfs）
+$ hadoop fs -appendToFile liubei.txt /sanguo/shuguo/kongming.txt
+
+#-put：等同于copyFromLocal
+# 区别：copyFromLocal可以指定线程 -t（一般不用）
+$ hadoop fs -put ./zaiyiqi.txt /user/atguigu/test/
+```
+
+#### 2. 下载
+
+```shell
+# -copyToLocal：从HDFS拷贝到本地
+$ hadoop fs -copyToLocal /sanguo/shuguo/kongming.txt ./
+
+# -get：等同于copyToLocal（没区别），就是从HDFS下载文件到本地
+$ hadoop fs -get /sanguo/shuguo/kongming.txt ./
+
+# -getmerge：合并下载多个文件，比如HDFS的目录 /user/atguigu/test下有多个文件:log.1, log.2,log.3,...
+$ hadoop fs -getmerge /user/atguigu/test/ ./zaiyiqi.txt
+#以下写法等同
+$ hadoop fs -getmerge /user/atguigu/test/* ./zaiyiqi.txt
+```
+
+#### 3. HDFS直接操作
+
+```shell
+# 1）-ls: 显示目录信息
+$ hadoop fs -ls /
+
+# 2）-mkdir：在HDFS上创建目录
+$ hadoop fs -mkdir -p /sanguo/shuguo
+
+# 3）-cat：显示文件内容
+$ hadoop fs -cat /sanguo/shuguo/kongming.txt
+
+# 4）-chgrp 、-chmod、-chown：Linux文件系统中的用法一样，修改文件所属权限
+$ hadoop fs  -chmod  666  /sanguo/shuguo/kongming.txt
+$ hadoop fs  -chown  atguigu:atguigu   /sanguo/shuguo/kongming.txt
+
+# 5）-cp ：从HDFS的一个路径拷贝到HDFS的另一个路径
+$ hadoop fs -cp /sanguo/shuguo/kongming.txt /zhuge.txt
+
+# 6）-mv：在HDFS目录中移动文件
+$ hadoop fs -mv /zhuge.txt /sanguo/shuguo/
+
+# 7）-tail：显示一个文件的末尾
+$ hadoop fs -tail /sanguo/shuguo/kongming.txt
+
+# 8）-rm：删除文件或文件夹
+$ hadoop fs -rm /user/atguigu/test/jinlian2.txt
+
+# 9）-rmdir：删除空目录
+# 创建一个空目录
+$ hadoop fs -mkdir /test
+# 删除
+$ hadoop fs -rmdir /test
+
+# 10）-du统计文件夹的大小信息
+# 统计目录总大小
+$ hadoop fs -du -s -h /user/atguigu/aa
+37 111 /aa
+#第一列标示该目录下总文件大小
+#第二列标示该目录下所有文件在集群上的总存储大小和副本数相关，副本数是3 ，所以第二列的是第一列的三倍 （第二列内容=文件大小*副本数）
+#第三列标示查询的目录
+
+# 和不加参数一样
+$ hadoop fs -du  -h /user/atguigu/aa
+37 111 sanguo.txt
+
+# 11）-setrep：设置HDFS中文件的副本数量  
+$ hadoop fs -setrep 10 /user/atguigu/sanguo.txt
+# 3<=真实的副本数<=设备数
+# 不管真实几个副本，第二列按照设置的副本数计算 
+$ hadoop fs -du  -h /user/atguigu/aa
+37 370 sanguo.txt
+```
+
+![image-20200613111908256](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200613111908.png)
+
+这里设置的副本数只是记录在NameNode的元数据中，**是否真的会有这么多副本，还得看DataNode的数量**。因为目前只有3台设备，最多也就3个副本，只有节点数的增加到10台时，副本数才能达到10。
+
+## 3. HDFS客户端操作（开发重点）
+
+### 1. 准备工作
+
+#### 1. windows上hadoop依赖配置
+
+将`05_尚硅谷大数据技术之hadoop\2.资料\01_jar包\03_Windows依赖\hadoop-3.0.0`放到一个目录（`D:\developer_tools\hadoop-3.0.0`)并配置环境变量，配置方法与JDK相同
+
+![image-20200613131238557](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200613131238.png)
+
+注意：
+
+1. 测试`winutils`如果不行，重启动电脑
+2. 有些电脑可能会有些问题（比如无法在代码中上传或者下载）需要将：`hadoop.dll` 和 `winutils.exe`放到`c:\windows\system32`目录下就好了
+
+![image-20200613131419425](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200613131419.png)
+
+这样就是配置成功了
+
+#### 2. idea中创建一个空工程，然后创建一个Maven的module并添加依赖
+
+```xml
+    <!--HDFS的依赖-->
+    <dependencies>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.12</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-slf4j-impl</artifactId>
+            <version>2.12.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-client</artifactId>
+            <version>3.1.3</version>
+        </dependency>
+    </dependencies>
+```
+
+   注意 ：IDEA中maven的配置（如果需要下载依赖的jar包）
+
+![image-20200613131617623](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200613131617.png)
+
+记录一下maven的配置（以免下次不小心更改了忘了原路径）
+
+注意 ：IDEA中maven的配置（如果需要下载依赖的jar包）
+
+![image-20200613131642452](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200613131642.png)
+
+`settings.xml`的信息（只写了需要更改的部分），如果idea中显示`settings.xml`有问题，那试着按下面的信息更改即可
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 http://maven.apache.org/xsd/settings-1.0.0.xsd">
+
+<localRepository>D:\developer_tools\apache-maven-3.5.4\repo</localRepository>
+
+  <mirrors>	 
+  <mirror>
+
+	<id>alimaven</id>
+
+	<name>aliyun maven</name>
+
+	<url>http://maven.aliyun.com/nexus/content/groups/public/</url>
+
+	<mirrorOf>central</mirrorOf>
+
+  </mirror>
+  </mirrors>
+
+</settings>
+```
+
+#### 3. 在项目的`src/main/resources`目录下，新建一个文件，命名为`log4j2.xml`，在文件中填入
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="error" strict="true" name="XMLConfig">
+    <Appenders>
+        <!-- 类型名为Console，名称为必须属性 -->
+        <Appender type="Console" name="STDOUT">
+            <!-- 布局为PatternLayout的方式，
+            输出样式为[INFO] [2018-01-22 17:34:01][org.test.Console]I'm here -->
+            <Layout type="PatternLayout"
+                    pattern="[%p] [%d{yyyy-MM-dd HH:mm:ss}][%c{10}]%m%n" />
+        </Appender>
+
+    </Appenders>
+
+    <Loggers>
+        <!-- 可加性为false -->
+        <Logger name="test" level="info" additivity="false">
+            <AppenderRef ref="STDOUT" />
+        </Logger>
+
+        <!-- root loggerConfig设置 -->
+        <Root level="info">
+            <AppenderRef ref="STDOUT" />
+        </Root>
+    </Loggers>
+</Configuration>
+```
+
+### 2. HDFS的API操作
+
+测试框架
+
+```java
+package com.atguigu.java;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+import java.io.IOException;
+import java.net.URI;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/13 14:21
+ */
+public class HDFSTest {
+    FileSystem fs;
+    Configuration conf;
+    /**
+     * 在执行任意一个单元测试前执行该方法
+     * @throws IOException
+     * @throws InterruptedException
+     */
+	@Before
+    public void createObject() throws IOException, InterruptedException {
+        /**
+         * 1. 获取文件系统对象
+         * get(
+         * final URI uri,  //core-site.xml  HDFS中NameNode的地址  集群操作路径  hdfs://hadoop102:9820
+         * final Configuration conf, //配置文件的对象 可以不配置，用默认 该配置只是针对本次操作有效，而不是改变集群配置
+         * final String user //操作集群的用户 atguigu
+         * )
+         */
+        conf = new Configuration();
+        //副本数 从hdfs-default中找参数和值
+        conf.set("dfs.replication", "1");
+        fs = FileSystem.get(URI.create("hdfs://hadoop102:9820"), conf, "atguigu");
+    }
+
+    /**
+     * 在执行任意一个单元测试后再执行该方法
+     */
+    @After
+    public void close(){
+        /**
+         * 3. 关资源
+         */
+        if(fs!=null){
+            try {
+                fs.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+}
+```
+
+#### 1. 上传
+
+配置hdfs-site.xml
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<configuration>
+    <property>
+        <name>dfs.replication</name>
+        <value>2</value>
+    </property>
+</configuration>
+```
+
+```java
+    /**
+     * 创建文件系统的对象
+     */
+    @Test
+    public void test() throws IOException {
+
+        /**
+         * 2. 具体操作
+         * 复制文件
+         * boolean delSrc : 是否删除原文件
+         * boolean overwrite : 如果目标地址已经存在和上传对象同名文件是否覆盖，true则覆盖，false则抛异常
+         * Path src : 原文件  (本地）
+         * Path dst : 目标地址 （HDFS)
+         */
+        fs.copyFromLocalFile(false,false,new Path("D:\\developer_tools\\200421JavaSE\\Items.txt"),new Path("/"));
+    }
+```
+
+![image-20200613144121756](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200613144121.png)
+
+
+
+![image-20200613144345849](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200613144345.png)
+
+配置文件的生效顺序（优先级：由高到低）：
+
+- conf：客户端代码中设置的值
+- resource中的hdfs-site：工程下的配置文件
+- hdfs-site：集群中的配置文件
+- hdfs-default：集群中的默认配置文件
+
+#### 2. 下载
+
+```java
+    /**
+     * 下载文件
+     */
+    @Test
+    public void download() throws IOException {
+        /**
+         * boolean delSrc, 是否删除源文件
+         * Path src, 源文件
+         * Path dst, 目标地址
+         * boolean useRawLocalFileSystem  是否使用crc校验
+         */
+        fs.copyToLocalFile(false,new Path("/Items.txt"),new Path("D:\\developer_tools\\HadoopTest\\HDFS\\Items.txt"),true);
+    }
+
+```
+
+#### 3. 删除
+
+```java
+    /**
+     * 删除文件夹
+     */
+    @Test
+    public void delete() throws IOException {
+        /**
+         * Path f, 路径
+         * boolean recursive 目录必须true 否则抛异常 ；文件无所谓都可
+         */
+        boolean delete = fs.delete(new Path("/test"), true);
+        System.out.println("是否成功删除："+delete);
+    }
+```
+
+#### 4. 移动/改名
+
+```java
+   /**
+     * 改名
+     */
+    @Test
+    public void rename() throws IOException {
+        /**
+         * path src 源文件
+         * path dst 目标文件（修改名后的文件）或地址
+         */
+        fs.rename(new Path("/Items.txt"),new Path("/MyQuestions.txt"));
+    }
+
+    /**
+     * 移动文件
+     */
+    @Test
+    public void remove() throws IOException {
+        /**
+         * path src 源文件
+         * path dst 目标文件（修改名后的文件）或地址
+         */
+        fs.rename(new Path("/MyQuestions.txt"),new Path("/sanguo/"));
+    }
+
+```
+
+
+
+#### 5. 文件详情查看
+
+```java
+/**
+     * 查看文件详情
+     */
+    @Test
+    public void listFile() throws IOException {
+        /**
+         * 获取迭代器
+         * pathString  文件或目录
+         * recursive 是否递归
+         */
+        RemoteIterator<LocatedFileStatus> localFile = fs.listFiles(new Path("/sanguo/"), true);
+        //获取具体的数据
+        while (localFile.hasNext()){
+
+            //获取一个数据
+            LocatedFileStatus file = localFile.next();
+            //所有者
+            String owner = file.getOwner();
+            //所属组
+            String group = file.getGroup();
+            //副本数
+            short replication = file.getReplication();
+            //文件名
+            String name = file.getPath().getName();
+            //获取块信息
+            BlockLocation[] blockLocations = file.getBlockLocations();
+            for (BlockLocation block : blockLocations) {
+                //输出块信息
+                String[] blockHosts = block.getHosts();
+                for (String blockHost : blockHosts) {
+                    System.out.println(blockHost);
+                }
+            }
+            System.out.println("======="+name+"========");
+        }
+    }
+```
+
+
+
+#### 6. 文件/文件夹 判断
+
+```java
+    /**
+     * 判断是文件还是文件夹
+     */
+    @Test
+    public void ifDirs() throws IOException {
+        FileStatus[] fileStatuses = fs.listStatus(new Path("/sanguo/"));
+        for (FileStatus file : fileStatuses) {
+            String name = file.getPath().getName();
+            boolean b1 = file.isFile();
+            System.out.println(name+"是否为文件："+b1);
+            boolean b2 = file.isDirectory();
+            System.out.println(name+"是否为目录："+b2);
+        }
+    }
+
+```
+
+#### 7. 上传、下载的本质就是IO流
+
+```java
+    /**
+     * 上传和下载的本质就是IO流
+     */
+    @Test
+    public void ioTest() throws IOException {
+        //输入流：从本地读文件
+        FileInputStream fis = new FileInputStream("D:\\developer_tools\\200421JavaSE\\Items.txt");
+        //输出流：上传至HDFS
+        FSDataOutputStream os = fs.create(new Path("/Items.txt"));
+        //一边读一边写:文件对拷
+        IOUtils.copyBytes(fis, os, conf);
+        //关流
+        IOUtils.closeStream(os);
+        IOUtils.closeStream(fis);
+    }
+```
+
+
+
+## 4. HDFS的数据流（多理解）
+
+### 1. HDFS写数据流程
+
+#### 1. 文件写入
+
+（1）客户端通过Distributed FileSystem模块向NameNode请求上传文件，NameNode检查目标文件是否已存在，父目录是否存在。
+
+（2）NameNode返回是否可以上传。
+
+（3）客户端请求第一个 Block上传到哪几个DataNode服务器上。
+
+（4）NameNode返回3个DataNode节点，分别为dn1、dn2、dn3。
+
+（5）客户端通过FSDataOutputStream模块请求dn1上传数据，dn1收到请求会继续调用dn2，然后dn2调用dn3，将这个通信管道建立完成。
+
+（6）dn1、dn2、dn3逐级应答客户端。
+
+（7）客户端开始往dn1上传第一个Block（先从磁盘读取数据放到一个本地内存缓存），以Packet为单位，dn1收到一个Packet就会传给dn2，dn2传给dn3；dn1每传一个packet会放入一个应答队列等待应答。
+
+（8）当一个Block传输完成之后，客户端再次请求NameNode上传第二个Block的服务器。（重复执行3-7步）。
+
+![image-20200613164445843](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200613164445.png)
+
+- 连接问题：5 请求建立通道 DateNode1--成功，DateNode2--失败 
+  - 客户端重新建立通道DateNode1--成功，DateNode3--成功
+  - 此时DateNode2没有数据
+  - DateNode会定时向NameNode汇报块信息，NameNode发现少一个副本，会找一个DateNode，建立一个副本补全
+- 传输问题：7传输数据  DateNode1--成功，DateNode2--失败 
+  - 处理方式与连接问题一样，会重新建立通道，然后向成功的DateNode传输
+
+#### 2. 网络拓扑-节点距离计算
+
+上面提到了FSDataOutputStream会找距离最近的DateNode，那什么叫距离最近呢？
+
+**节点距离：两个节点到达最近的共同祖先的距离总和。**
+
+![image-20200613170038034](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200613170038.png)
+
+#### 3. 机架感知（副本存储节点选择）
+
+[3.1.3官方文档](http://hadoop.apache.org/docs/r2.7.2/hadoop-project-dist/hadoop-hdfs/HdfsDesign.html#Data_Replication)
+
+常见的情况,当需要3个副本时
+
+- 第一个副本：
+  - 如果写的机器本身在一个DateNode上，HDFS会将一个副本在本地机器（写的机器）上，
+  - 否则会随机找一个Datenode。
+- 第二个副本
+  - 在另一个机架的随机一个节点
+- 第三个副本
+  - 在第二个副本所在机架的随机节点
+
+![image-20200615091248039](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200615091248.png)
+
+### 2. HDFS读数据流程
+
+![image-20200615091916613](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200615091916.png)
+
+（1）客户端通过Distributed FileSystem向NameNode请求下载文件，NameNode通过查询元数据，找到文件块所在的DataNode地址。
+
+（2）挑选一台DataNode（就近原则，然后随机）服务器，请求读取数据。
+
+（3）DataNode开始传输数据给客户端（从磁盘里面读取数据输入流，以Packet为单位来做校验）。
+
+（4）客户端以Packet为单位接收，先在本地缓存，然后写入目标文件。
+
+## 5. NameNode和SecondaryNameNode（面试开发重点）
+
+用哪个用户启动的集群，那该用户就是超级管理员。
+
+```
+#实际的存储路径
+/opt/module/hadoop-3.1.3/data/dfs/data/current/BP-2023207197-192.168.1.102-1591944079816/current/finalized/subdir0/subdir0
+```
+
+### 1. NN和2NN工作机制
+
+![image-20200615103254586](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200615103254.png)
+
+- 滚动日志edits：历史记录都有，2NN中少了最新的（如图中290）
+- 元数据镜像文件fsimage：只有两份
+  - 一个是旧的（下一次会被覆盖）
+  - 一个是新的（下一次就是旧的）
+
+![image-20200615211115739](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200615211115.png)
+
+**NameNode中的元数据是存储在哪里的？**
+
+首先，我们做个假设，如果存储在NameNode节点的磁盘中，因为经常需要进行随机访问，还有响应客户请求，必然是效率过低。因此，元数据需要存放在内存中。但如果只存在内存中，一旦断电，元数据丢失，整个集群就无法工作了。**因此产生在磁盘中备份元数据的FsImage**--只记录操作结果。
+
+这样又会带来新的问题，当在内存中的元数据更新时，如果同时更新FsImage，就会导致效率过低，且容易丢失数据。但如果不更新，就会发生一致性问题，一旦NameNode节点断电，就会产生数据丢失。
+
+(搞buffer的问题：1. 占用原本就吃紧的内存 2. 如果突然断电仍会造成部分内容丢失 3. 在达到buffer阈值写入磁盘时，namenode无法工作)
+
+**因此，引入Edits文件--只记录操作(只进行追加操作，效率很高)。每当元数据有更新或者添加元数据时，修改内存中的元数据并追加到Edits中。**这样，一旦NameNode节点断电，可以通过FsImage和Edits的合并，合成元数据。
+
+但是，如果长时间添加数据到Edits中，会导致该文件数据过大，效率降低，而且一旦断电，恢复元数据需要的时间过长。因此，需要定期进行FsImage和Edits的合并，如果这个操作由NameNode节点完成，又会效率过低。因此，引入一个新的节点SecondaryNamenode，专门用于FsImage和Edits的合并。
+
+1）第一阶段：NameNode启动
+
+（1）第一次启动NameNode格式化后，创建Fsimage和Edits文件。如果不是第一次启动，直接加载编辑日志和镜像文件到内存。
+
+（2）客户端对元数据进行增删改的请求。
+
+（3）NameNode记录操作日志，更新滚动日志。
+
+（4）NameNode在内存中对元数据进行增删改。
+
+2）第二阶段：Secondary NameNode工作
+
+（1）Secondary NameNode询问NameNode是否需要CheckPoint。直接带回NameNode是否检查结果。
+
+（2）Secondary NameNode请求执行CheckPoint。
+
+（3）NameNode滚动正在写的Edits日志。
+
+（4）将滚动前的编辑日志和镜像文件拷贝到Secondary NameNode。
+
+（5）Secondary NameNode加载编辑日志和镜像文件到内存，并合并。
+
+（6）生成新的镜像文件fsimage.chkpoint。
+
+（7）拷贝fsimage.chkpoint到NameNode。
+
+（8）NameNode将fsimage.chkpoint重新命名成fsimage。
+
+### 2. Fsimage和Edits解析
+
+#### 1. NameNode被格式化之后产生的文件解析
+
+目录：`/opt/module/hadoop-3.1.3/data/dfs/name/current`
+
+- Fsimage：HDFS文件系统元数据的一个永久性的检查点，其中包含HDFS文件系统的所有目录和文件iNode的序列化信息
+- Edits：存放HDFS文件系统的所有更新操作的路径，文件系统客户端的所有写操作首先会被记录到Edits文件中。
+- seen_txid：保存的是一个数字，最后一个edits_的数字
+- 每次NameNode启动的时候都会讲Fsimage文件读入内存，加载Edits里面的更新操作，保证内存中的元数据信息是最新的、同步的，可以看成NameNode启动的时候就酱Fsimage和Edits文件进行了合并。
+
+#### 2. 查看Fsimage文件
+
+```
+hdfs oiv -p 文件类型 -i镜像文件 -o 转换后文件输出路径
+```
+
+```shell
+$ hdfs oiv -p XML -i fsimage_0000000000000000286 -o  /home/atguigu/fsimage.xml
+```
+
+```xml
+<?xml version="1.0"?>
+<fsimage><version><layoutVersion>-64</layoutVersion><onDiskVersion>1</onDiskVersion><oivRevision>ba631c436b806728f8ec2f54ab1e289526c90579</oivRevision></version>
+<NameSection><namespaceId>159338274</namespaceId><genstampV1>1000</genstampV1><genstampV2>1022</genstampV2><genstampV1Limit>0</genstampV1Limit><lastAllocatedBlockId>1073741845</lastAllocatedBlockId><txid>286</txid></NameSection>
+<ErasureCodingSection>
+<erasureCodingPolicy>
+<policyId>1</policyId><policyName>RS-6-3-1024k</policyName><cellSize>1048576</cellSize><policyState>DISABLED</policyState><ecSchema>
+<codecName>rs</codecName><dataUnits>6</dataUnits><parityUnits>3</parityUnits></ecSchema>
+</erasureCodingPolicy>
+
+<erasureCodingPolicy>
+<policyId>2</policyId><policyName>RS-3-2-1024k</policyName><cellSize>1048576</cellSize><policyState>DISABLED</policyState><ecSchema>
+<codecName>rs</codecName><dataUnits>3</dataUnits><parityUnits>2</parityUnits></ecSchema>
+</erasureCodingPolicy>
+
+<erasureCodingPolicy>
+<policyId>3</policyId><policyName>RS-LEGACY-6-3-1024k</policyName><cellSize>1048576</cellSize><policyState>DISABLED</policyState><ecSchema>
+<codecName>rs-legacy</codecName><dataUnits>6</dataUnits><parityUnits>3</parityUnits></ecSchema>
+</erasureCodingPolicy>
+
+<erasureCodingPolicy>
+<policyId>4</policyId><policyName>XOR-2-1-1024k</policyName><cellSize>1048576</cellSize><policyState>DISABLED</policyState><ecSchema>
+<codecName>xor</codecName><dataUnits>2</dataUnits><parityUnits>1</parityUnits></ecSchema>
+</erasureCodingPolicy>
+
+<erasureCodingPolicy>
+<policyId>5</policyId><policyName>RS-10-4-1024k</policyName><cellSize>1048576</cellSize><policyState>DISABLED</policyState><ecSchema>
+<codecName>rs</codecName><dataUnits>10</dataUnits><parityUnits>4</parityUnits></ecSchema>
+</erasureCodingPolicy>
+
+</ErasureCodingSection>
+
+<INodeSection><lastInodeId>16442</lastInodeId><numInodes>7</numInodes><inode><id>16385</id><type>DIRECTORY</type><name></name><mtime>1592035833804</mtime><permission>atguigu:supergroup:0755</permission><nsquota>9223372036854775807</nsquota><dsquota>-1</dsquota></inode>
+<inode><id>16432</id><type>DIRECTORY</type><name>sanguo</name><mtime>1592033587230</mtime><permission>atguigu:supergroup:0755</permission><nsquota>-1</nsquota><dsquota>-1</dsquota></inode>
+<inode><id>16433</id><type>FILE</type><name>readme.txt</name><replication>3</replication><mtime>1592019819419</mtime><atime>1592019664387</atime><preferredBlockSize>134217728</preferredBlockSize><permission>atguigu:supergroup:0644</permission><blocks><block><id>1073741838</id><genstamp>1016</genstamp><numBytes>103</numBytes></block>
+</blocks>
+<storagePolicyId>0</storagePolicyId></inode>
+<inode><id>16434</id><type>FILE</type><name>help.txt</name><replication>3</replication><mtime>1592019740614</mtime><atime>1592019740462</atime><preferredBlockSize>134217728</preferredBlockSize><permission>atguigu:atguigu:0777</permission><blocks><block><id>1073741839</id><genstamp>1015</genstamp><numBytes>39</numBytes></block>
+</blocks>
+<storagePolicyId>0</storagePolicyId></inode>
+<inode><id>16435</id><type>FILE</type><name>append.txt</name><replication>3</replication><mtime>1592019873041</mtime><atime>1592019872912</atime><preferredBlockSize>134217728</preferredBlockSize><permission>atguigu:supergroup:0644</permission><blocks><block><id>1073741840</id><genstamp>1017</genstamp><numBytes>38</numBytes></block>
+</blocks>
+<storagePolicyId>0</storagePolicyId></inode>
+<inode><id>16440</id><type>FILE</type><name>MyQuestions.txt</name><replication>1</replication><mtime>1592030641742</mtime><atime>1592030641661</atime><preferredBlockSize>134217728</preferredBlockSize><permission>atguigu:supergroup:0644</permission><blocks><block><id>1073741844</id><genstamp>1021</genstamp><numBytes>1907</numBytes></block>
+</blocks>
+<storagePolicyId>0</storagePolicyId></inode>
+<inode><id>16442</id><type>FILE</type><name>Items.txt</name><replication>1</replication><mtime>1592035834608</mtime><atime>1592035833804</atime><preferredBlockSize>134217728</preferredBlockSize><permission>atguigu:supergroup:0644</permission><blocks><block><id>1073741845</id><genstamp>1022</genstamp><numBytes>1907</numBytes></block>
+</blocks>
+<storagePolicyId>0</storagePolicyId></inode>
+</INodeSection>
+<INodeReferenceSection></INodeReferenceSection><SnapshotSection><snapshotCounter>0</snapshotCounter><numSnapshots>0</numSnapshots></SnapshotSection>
+<INodeDirectorySection><directory><parent>16385</parent><child>16442</child><child>16432</child></directory>
+<directory><parent>16432</parent><child>16440</child><child>16435</child><child>16434</child><child>16433</child></directory>
+</INodeDirectorySection>
+<FileUnderConstructionSection></FileUnderConstructionSection>
+<SecretManagerSection><currentId>0</currentId><tokenSequenceNumber>0</tokenSequenceNumber><numDelegationKeys>0</numDelegationKeys><numTokens>0</numTokens></SecretManagerSection><CacheManagerSection><nextDirectiveId>1</nextDirectiveId><numDirectives>0</numDirectives><numPools>0</numPools></CacheManagerSection>
+</fsimage>
+```
+
+##### 为什么Fsimage中没有记录块所对应DataNode
+
+- NN重启后，DN会主动找NN汇报自身情况
+- 反正都要汇报，就不记录了，还更效率
+
+#### 3. 查看Edits文件
+
+```
+hdfs oev -p 文件类型 -i镜像文件 -o 转换后文件输出路径
+```
+
+```shell
+$  hdfs oev -p XML -i edits_0000000000000000288-0000000000000000289 -o /home/atguigu/edits.xml
+```
+
+```xml
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<EDITS>
+  <EDITS_VERSION>-64</EDITS_VERSION>
+  <RECORD>
+    <OPCODE>OP_START_LOG_SEGMENT</OPCODE>
+    <DATA>
+      <TXID>288</TXID>
+    </DATA>
+  </RECORD>
+  <RECORD>
+    <OPCODE>OP_END_LOG_SEGMENT</OPCODE>
+    <DATA>
+      <TXID>289</TXID>
+    </DATA>
+  </RECORD>
+</EDITS>
+```
+
+##### NameNode如何确定下次开机启动的时候合并哪些Edits？
+
+根据edits和fsimage匹配的version：
+
+- EDITS_VERSION
+- layoutVersion
+
+### 3. CheckPoint时间设置（了解）
+
+`hdfs-default.xml`
+
+1）通常情况下，SecondaryNameNode每隔一小时执行一次。
+
+```xml
+<property>
+  <name>dfs.namenode.checkpoint.period</name>
+  <value>3600</value>
+</property>
+```
+
+2）一分钟检查一次操作次数，3当操作次数达到1百万时，SecondaryNameNode执行一次。
+
+```xml
+<property>
+  <name>dfs.namenode.checkpoint.txns</name>
+  <value>1000000</value>
+<description>操作动作次数</description>
+</property>
+
+<property>
+  <name>dfs.namenode.checkpoint.check.period</name>
+  <value>60</value>
+<description> 1分钟检查一次操作次数</description>
+</property >
+
+```
+
+### 4. NameNode故障处理（扩展）
+
+后面不会用2NN，因为它总会丢失一部分。所以此部分是扩展内容
+
+#### 将SecondaryNameNode中数据拷贝到NameNode存储数据的目录(了解即可)
+
+```shell
+# kill -9 NameNode进程 jps看进程id
+$ hdfs --daemon stop namenode
+# 删除NameNode存储的数据--测试是否能正常恢复
+$ rm -rf /opt/module/hadoop-3.1.3/data/dfs/name
+current/*
+# 拷贝SecondaryNameNode中数据到原NameNode存储数据目录
+$ scp -r  atguigu@hadoop104:/opt/module/hadoop-3.1.3/data/dfs/namesecondary/current/*  /opt/module/hadoop-3.1.3/data/dfs/name/current/
+
+# 重新启动NameNode
+$ hdfs --daemon start namenode
+```
+
+### 5. 集群安全模式
+
+安全模式：只能查看
+
+什么时候会进：
+
+1. 资源不足时，不接受写操作
+2. hdfs启动时，也会进入到安全模式（除了初始化后第一次启动，此时没有块信息，不会进入）
+   1. 先读2NN内容，恢复
+   2. 接收DN的汇报内容
+3. 自我保护状态（实际上说的也是1、2）
+
+什么时候会退出：满足**最小副本条件**之后30s
+
+![image-20200615215435779](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200615215435.png)
+
+![image-20200615114340309](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200615114340.png)
+
+1）基本语法
+
+集群处于安全模式，不能执行重要操作（写操作）。集群启动完成后，自动退出安全模式。
+
+```shell
+#（功能描述：查看安全模式状态）
+$ bin/hdfs dfsadmin -safemode get  
+ #（功能描述：进入安全模式状态）
+$ bin/hdfs dfsadmin -safemode enter 
+ #（功能描述：离开安全模式状态）
+$ bin/hdfs dfsadmin -safemode leave
+ #（功能描述：等待安全模式状态）
+$ bin/hdfs dfsadmin -safemode wait 
+```
+
+2）案例
+
+ 模拟等待安全模式
+
+3）查看当前模式
+
+```shell
+[atguigu@hadoop102 hadoop-3.1.3]$ hdfs dfsadmin -safemode get
+
+Safe mode is OFF
+```
+
+4）先进入安全模式
+
+```shell
+[atguigu@hadoop102 hadoop-3.1.3]$ bin/hdfs dfsadmin -safemode enter
+```
+
+5）创建并执行下面的脚本
+
+在/opt/module/hadoop-3.1.3路径上，编辑一个脚本safemode.sh
+
+```shell
+[atguigu@hadoop102 hadoop-3.1.3]$ vim safemode.sh
+
+#!/bin/bash
+hdfs dfsadmin -safemode wait
+#上面一从等待状态退出就执行下面的命令
+echo "巴拉巴拉小魔仙已准备就绪！"
+```
+
+```
+[atguigu@hadoop102 hadoop-3.1.3]$ chmod 777 safemode.sh
+[atguigu@hadoop102 hadoop-3.1.3]$ ./safemode.sh 
+```
+
+6）再打开一个窗口，执行
+
+```shell
+[atguigu@hadoop102 hadoop-3.1.3]$ bin/hdfs dfsadmin -safemode leave
+```
+
+7）观察
+
+8）再观察上一个窗口
+
+```shell
+Safe mode is OFF
+```
+
+![image-20200615221836302](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200615221836.png)
+
+## 6. DataNode（面试开发重点）
+
+### 1. 工作机制
+
+![image-20200615120534431](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200615120534.png)
+
+
+
+### 2. 数据完整性
+
+校验准确率由低到高，效率由高到低：
+
+- 奇偶校验：看1的个数是奇数还是偶数
+- crc校验（32位）
+- md5校验（128位）
+- sha1校验（160位）
+
+如下是DataNode节点保证数据完整性的方法。
+
+（1）当DataNode读取Block的时候，它会计算CheckSum。
+
+（2）如果计算后的CheckSum，与Block创建时值不一样，说明Block已经损坏。
+
+（3）Client读取其他DataNode上的Block。
+
+（4）DataNode在其文件创建后周期验证CheckSum。
+
+![image-20200615230503103](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200615230503.png)
+
+### 3. 掉线时限参数设置
+
+需要注意的是`hdfs-site.xml `配置文件中的`heartbeat.recheck.interval`的单位为毫秒，`dfs.heartbeat.interval`的单位为秒。
+
+```xml
+<property>
+    <name>dfs.namenode.heartbeat.recheck-interval</name>
+    <value>300000</value>
+</property>
+<property>
+    <name>dfs.heartbeat.interval</name>
+    <value>3</value>
+</property>
+```
+
+![image-20200615231017940](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200615231018.png)
+
+### 4. 服役新数据节点
+
+#### 1.  服役新节点（如无样板机，需要配置的）：
+
+​	1.配置JDK和Hadoop（配置各种配置文件）
+​	2.配置环境变量
+​	3.hosts文件（提前已经配置到hadoop110）
+​	4.关闭防火墙
+​	5.启动DataNode
+​	6.创建用户名，创建对应的使用目录
+​	7.修改ip地址
+​	8.修改hostname
+
+#### 2. 使用样板机创建新节点（前文提到的hadoop100即为样板机）
+
+​	1.配置JDK和Hadoop（配置各种配置文件 - 使用scp拷贝）
+​	2.配置环境变量，修改hostname，记着把hadoop中的data和logs删除掉
+​	3.启动DataNode
+​	4.hadoop102-105必须配置在hosts文件中（前面已经配置过了）。
+
+#### 3. 实操hadoop105
+
+克隆样板机，如下配置后，重启
+
+![image-20200615231533691](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200615231533.png)
+
+```shell
+#这些可以在做样板机的时候做好
+[atguigu@hadoop102 ~]$ scp -r /opt/module/* atguigu@hadoop105:/opt/module/
+[atguigu@hadoop102 ~]$ scp  -r /etc/profile.d/my_env.sh root@hadoop105:/etc/profile.d/
+```
+
+```shell
+#测试环境已经搭建好
+[atguigu@hadoop105 module]$ source /etc/profile.d/my_env.sh 
+[atguigu@hadoop105 module]$ hadoop version
+Hadoop 3.1.3
+Source code repository https://gitbox.apache.org/repos/asf/hadoop.git -r ba631c436b806728f8ec2f54ab1e289526c90579
+Compiled by ztang on 2019-09-12T02:47Z
+Compiled with protoc 2.5.0
+From source with checksum ec785077c385118ac91aadde5ec9799
+This command was run using /opt/module/hadoop-3.1.3/share/hadoop/common/hadoop-common-3.1.3.jar
+[atguigu@hadoop105 hadoop-3.1.3]$ rm -rf data
+[atguigu@hadoop105 hadoop-3.1.3]$ rm -rf logs
+```
+
+```shell
+#启动节点
+[atguigu@hadoop105 hadoop-3.1.3]$ hdfs --daemon start datanode
+[atguigu@hadoop105 hadoop-3.1.3]$ jps
+1792 DataNode
+1864 Jps
+```
+
+![image-20200615232725717](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200615232725.png)
+
+### 5. 退役旧数据节点
+
+- 在DN上配置可分发可不分发，因为读取黑白名单的是DN。否则要分发。
+- 不允许白名单和黑名单中同时出现同一个主机名称
+
+#### 1. 黑名单退役
+
+在黑名单上面的主机都会被强制退出。所有需要退役的节点必须在黑名单设置，因为退役节点可以把自己存的块转到其他节点上。
+
+只动名单，没动配置文件不需重启NameNode，只需刷新节点即可。
+
+##### 1. 配置黑名单
+
+```shell
+[atguigu@hadoop102 ~]$ touch /opt/module/hadoop-3.1.3/etc/hadoop/dfs.hosts.exclude
+[atguigu@hadoop102 ~]$ vim /opt/module/hadoop-3.1.3/etc/hadoop/dfs.hosts.exclude 
+#黑名单
+hadoop105
+```
+
+##### 2. 配置文件增加属性
+
+```shell
+$ vim /opt/module/hadoop-3.1.3/etc/hadoop/hdfs-site.xml
+```
+
+```xml
+<property>
+<name>dfs.hosts.exclude</name>
+      <value>/opt/module/hadoop-3.1.3/etc/hadoop/dfs.hosts.exclude</value>
+</property>
+```
+
+##### 3. 刷新（只修改了黑名单）| 重启NameNode（修改了hadoop配置文件）
+
+```shell
+#重启NameNode
+[atguigu@hadoop102 hadoop]$ hdfs --daemon stop namenode
+[atguigu@hadoop102 hadoop]$ hdfs --daemon start namenode
+
+#刷新
+[atguigu@hadoop102 hadoop]$ hdfs dfsadmin -refreshNodes
+Refresh nodes successful
+[atguigu@hadoop102 hadoop]$ yarn rmadmin -refreshNodes
+2020-06-16 00:18:25,820 INFO client.RMProxy: Connecting to ResourceManager at hadoop103/192.168.1.103:8033
+```
+
+![image-20200616002420976](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616002421.png)
+
+所有块已经复制完成后，节点会从”退役中“变为”已退役“，并在节点列表中显示。
+
+如果副本数是3，服役的节点小于等于3，是不能退役成功的，需要修改副本数后才能退役
+
+##### 4. 此时hadoop105的节点还在运行，需要手动关闭
+
+![image-20200616002638075](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616002638.png)
+
+```shell
+$ hdfs --daemon stop datanode
+```
+
+##### 5. 集群再平衡
+
+如数据不均衡 ，则可调用
+
+```shell
+$ /opt/module/hadoop-3.1.3/sbin/start-balancer.sh 
+```
+
+#### 2. 添加白名单
+
+添加到白名单的主机节点，都允许访问NameNode，不在白名单的主机节点，都会被退出。
+
+没过程，不在白名单的直接隐藏了。不推荐
+
+```shell
+$ vim /opt/module/hadoop-3.1.3/etc/hadoop/dfs.hosts
+hadoop102
+hadoop103
+hadoop104
+
+$ vim /opt/module/hadoop-3.1.3/etc/hadoop/hdfs-site.xml
+```
+
+```xml
+<property>
+<name>dfs.hosts</name>
+<value>/opt/module/hadoop-3.1.3/etc/hadoop/dfs.hosts</value>
+</property>
+```
+
+```shell
+#分发
+$ xsync hdfs-site.xml 
+#重启
+$ mycluster stop
+$ mycluster start
+```
+
+![image-20200616004127057](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616004141.png)
+
+### 6. 多目录设置
+
+比如一个机器，两个磁盘，可以使不同目录对应不同磁盘，使每个目录存储的数据不一样，比如file分成file1和file2存在D、E两个盘中，避免D或E损坏导致file整个丢失。（数据不是副本）
+
+没啥实际意义，hadoop本来就有副本机制。
+
+配置hdfs-site.xml（需要分发）
+
+```xml
+<property>
+        <name>dfs.datanode.data.dir</name>
+<value>file:///${hadoop.tmp.dir}/dfs/data1,file:///${hadoop.tmp.dir}/dfs/data2</value>
+</property>
+```
+
+# 三、MapReduce
+
+## 1. MapReduce概述
+
+### 1. 定义
+
+- 分布式**运算**程序的编程框架。
+
+- “基于Hadoop的数据分析应用”的核心框架
+
+  将**用户编写的业务逻辑代码**和**自带默认组件**整合成一个完整的**分布式运算程序**
+
+### 2. 优缺点
+
+#### 优点
+
+1. 易于编程：简单的实现一些接口，就可以完成一个分布式程序。与写一个简单的串行程序是一模一样的。
+2. 良好的扩展性：简单的增加廉价的PC机器就可扩展它的计算能力
+3. 高容错性：其中一台挂了，自动就把任务转移节点，不至于运行失败。
+4. 适合PB级以上海量数据的离线处理
+
+#### 缺点
+
+1. 不擅长实时计算：无法ms或s级返回结果。
+2. 不擅长流式计算：输入数据集是静态的，由其自身的设计特点决定的。
+3. 不擅长DAG（有向图）计算：多个应用程序存在依赖关系，A-->B-->C，A的输出是B的输入，B的输出是C的输入。**MapReduce每次作业的输出结果都要写入磁盘，再由下个程序调用，会造成大量的磁盘IO，导致MapReduce处理此类计算的性能非常低下。**
+
+### 3. 核心思想
+
+![image-20200616010105216](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616010105.png)
+
+![image-20200615165240148](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200615165240.png)
+
+（1）分布式的运算程序往往需要分成至少2个阶段。
+
+（2）第一个阶段的MapTask并发实例，完全并行运行，互不相干。
+
+（3）第二个阶段的ReduceTask并发实例互不相干，但是他们的数据依赖于上一个阶段的所有MapTask并发实例的输出。
+
+（4）MapReduce编程模型只能包含一个Map阶段和一个Reduce阶段，如果用户的业务逻辑非常复杂，那就只能多个MapReduce程序，串行运行。
+
+总结：分析WordCount数据流走向深入理解MapReduce核心思想。
+
+![image-20200616010323188](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616010326.png)
+
+### 4. 进程
+
+一个完整的MapReduce程序在分布式运行时有三类实例进程：
+
+（1）**MrAppMaster**：负责整个程序的过程调度及状态协调。
+
+（2）**MapTask**：负责Map阶段的整个数据处理流程。
+
+（3）**ReduceTask**：负责Reduce阶段的整个数据处理流程。
+
+### 5. 官方WordCount源码
+
+三个类
+
+- Map类:继承Mapper
+- Reduce类:继承Reducer
+- 驱动类：main方法，说明使用Map类,Reduce类
+
+```java
+package org.apache.hadoop.examples;
+
+import java.io.IOException;
+import java.io.PrintStream;
+import java.util.StringTokenizer;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Mapper.Context;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.Reducer.Context;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.hadoop.util.GenericOptionsParser;
+
+public class WordCount
+{
+  public static void main(String[] args)
+    throws Exception
+  {
+    Configuration conf = new Configuration();
+    String[] otherArgs = new GenericOptionsParser(conf, args).getRemainingArgs();
+    if (otherArgs.length < 2) {
+      System.err.println("Usage: wordcount <in> [<in>...] <out>");
+      System.exit(2);
+    }
+    Job job = Job.getInstance(conf, "word count");
+    job.setJarByClass(WordCount.class);
+    job.setMapperClass(TokenizerMapper.class);
+    job.setCombinerClass(IntSumReducer.class);
+    job.setReducerClass(IntSumReducer.class);
+    job.setOutputKeyClass(Text.class);
+    job.setOutputValueClass(IntWritable.class);
+    for (int i = 0; i < otherArgs.length - 1; i++) {
+      FileInputFormat.addInputPath(job, new Path(otherArgs[i]));
+    }
+    FileOutputFormat.setOutputPath(job, new Path(otherArgs[(otherArgs.length - 1)]));
+
+    System.exit(job.waitForCompletion(true) ? 0 : 1);
+  }
+
+  public static class IntSumReducer extends Reducer<Text, IntWritable, Text, IntWritable>
+  {
+    private IntWritable result = new IntWritable();
+
+    public void reduce(Text key, Iterable<IntWritable> values, Reducer<Text, IntWritable, Text, IntWritable>.Context context)
+      throws IOException, InterruptedException
+    {
+      int sum = 0;
+      for (IntWritable val : values) {
+        sum += val.get();
+      }
+      this.result.set(sum);
+      context.write(key, this.result);
+    }
+  }
+
+  public static class TokenizerMapper extends Mapper<Object, Text, Text, IntWritable>
+  {
+    private static final IntWritable one = new IntWritable(1);
+    private Text word = new Text();
+
+    public void map(Object key, Text value, Mapper<Object, Text, Text, IntWritable>.Context context) throws IOException, InterruptedException
+    {
+      StringTokenizer itr = new StringTokenizer(value.toString());
+      while (itr.hasMoreTokens()) {
+        this.word.set(itr.nextToken());
+        context.write(this.word, one);
+      }
+    }
+  }
+}
+```
+
+### 6. 常用数据序列化类型
+
+### 7. WordCount案例实操
+
+## 2. Hadoop序列化
+
+## 3. MapReduce框架原理
+
+# 四、Yarn
+
+## 1. Yarn基本架构
+
+## 2. Yarn工作机制
+
+## 3. 作业提交全过程
+
+## 4. 资源调度器
+
+## 5. 容量调度器多队列提交案例
+
+### 1. 需求
+
+### 2. 配置多队列的容量调度器
+
+### 3. 向Hive队列提交任务
+
+## 6. MapReduce&Yarn常见错误及解决方案
+
