@@ -2872,11 +2872,11 @@ $ mycluster start
 
 一个完整的MapReduce程序在分布式运行时有三类实例进程：
 
-（1）**MrAppMaster**：负责整个程序的过程调度及状态协调。
+（1）**MrAppMaster**：负责**整个程序**的过程调度及状态协调。
 
-（2）**MapTask**：负责Map阶段的整个数据处理流程。
+（2）**MapTask**：负责**Map阶段**的整个数据处理流程。
 
-（3）**ReduceTask**：负责Reduce阶段的整个数据处理流程。
+（3）**ReduceTask**：负责**Reduce阶段**的整个数据处理流程。
 
 ### 5. 官方WordCount源码
 
@@ -2966,9 +2966,53 @@ public class WordCount
 
 ### 6. 常用数据序列化类型
 
-### 7. WordCount案例实操
+| Java类型   | Hadoop Writable类型 |
+| ---------- | ------------------- |
+| Boolean    | BooleanWritable     |
+| Byte       | ByteWritable        |
+| Int        | IntWritable         |
+| Float      | FloatWritable       |
+| Long       | LongWritable        |
+| Double     | DoubleWritable      |
+| **String** | **Text**            |
+| Map        | MapWritable         |
+| Array      | ArrayWritable       |
+
+Java类型是Serialzable接口，是传统的序列化。弊端是序列化时会多一些额外数据。所以Hadoop自己搞了一套对应的序列化数据类型。
+
+- String   --->   Text
+- 其他都是在后面+Writable
+
+### @@7. WordCount案例实操
 
 ## 2. Hadoop序列化
+
+### 1. 序列化概述
+
+#### 1. what
+
+##### 序列化
+
+把内存中的对象，转换成字节序列
+
+##### 反序列化
+
+#### 2. why
+
+##### 为什么要序列化
+
+序列化可以存储“活的“对象，可以将其发送到远程计算机。（一般只生存在内存中）
+
+##### 为什么不用java的序列化
+
+java的序列化是重量级的序列化框架（Serializable），会有许多额外的信息
+
+- 不便于高效传输
+- 占用空间
+
+### 2. 自定义bean对象实现序列化接口（writable）
+
+### 3. 序列化案例实操
 
 ## 3. MapReduce框架原理
 
