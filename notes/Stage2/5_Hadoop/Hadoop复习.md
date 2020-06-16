@@ -2993,9 +2993,17 @@ Java类型是Serialzable接口，是传统的序列化。弊端是序列化时�
 
 ##### 序列化
 
-把内存中的对象，转换成字节序列
+把内存中的对象，转换成字节序列。
+
+- 网络数据传输：把网易云音乐中的歌分享到微信中。
+- 磁盘上对象的传输：map写到本地
 
 ##### 反序列化
+
+将收到字节序列或者是磁盘的持久化数据，转换成内存中的对象
+
+- 网络数据传输：微信中听网易云音乐分享过来的歌
+- 磁盘上对象的传输：reduce从本地读
 
 #### 2. why
 
@@ -3010,11 +3018,1244 @@ java的序列化是重量级的序列化框架（Serializable），会有许多�
 - 不便于高效传输
 - 占用空间
 
+#### 3. How good
+
+1. 紧凑：高效使用存储空间
+2. 快速：读写数据的额外开销小
+3. 可扩展：随着通信协议的升级而可升级
+4. 互操作：支持多语言的交互
+
 ### 2. 自定义bean对象实现序列化接口（writable）
+
+```java
+package com.atguigu.writable;
+
+import org.apache.hadoop.io.Writable;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/16 20:09
+ *
+ * 使用hadoop序列化框架
+ * 1. 自定义类并实现wirtable接口
+ * 2. 重写wirte和readFields方法
+ * 3. 读时数据的顺序必须和写时数据的顺序相同
+ */
+public class FlowBean implements Writable {
+    //上行流量
+    private long upFlow;
+    //下行流量
+    private long downFlow;
+    //总流量
+    private long sumFlow;
+    /**
+     * 序列化：写
+     * @param out
+     * @throws IOException
+     */
+    public void write(DataOutput out) throws IOException {
+        out.writeLong(upFlow);
+        out.writeLong(downFlow);
+        out.writeLong(sumFlow);
+    }
+
+    /**
+     * 反序列化：读
+     * @param in
+     * @throws IOException
+     */
+    public void readFields(DataInput in) throws IOException {
+        upFlow = in.readLong();
+        downFlow = in.readLong();
+        sumFlow = in.readLong();
+    }
+}
+
+```
 
 ### 3. 序列化案例实操
 
+#### 1. 本地运行
+
+在`D:\hdfstest\input`下创建`text.txt`，内容为
+
+```
+aa
+ab
+ac
+aa
+cc
+bb
+dd
+aa
+cc
+dd
+bb
+abc
+```
+
+1. 以maven新建module，pom.xml中添加HDFS依赖
+
+   ```xml
+       <!--HDFS的依赖-->
+       <dependencies>
+           <dependency>
+               <groupId>junit</groupId>
+               <artifactId>junit</artifactId>
+               <version>4.12</version>
+           </dependency>
+           <dependency>
+               <groupId>org.apache.logging.log4j</groupId>
+               <artifactId>log4j-slf4j-impl</artifactId>
+               <version>2.12.0</version>
+           </dependency>
+           <dependency>
+               <groupId>org.apache.hadoop</groupId>
+               <artifactId>hadoop-client</artifactId>
+               <version>3.1.3</version>
+           </dependency>
+       </dependencies>
+   ```
+
+2. 创建Mapper、Reducer类
+
+   ```java
+   package com.atguigu.wordcount;
+   
+   import org.apache.hadoop.io.IntWritable;
+   import org.apache.hadoop.io.LongWritable;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Mapper;
+   
+   import java.io.IOException;
+   
+   /**
+    * @author Mrs.An Xueying
+    * 2020/6/16 9:29
+    * 1. 自定义的类需要继承Mapper，Mapper的四个泛型如下：
+    * Mapper<KEYIN, VALUEIN, KEYOUT, VALUEOUT>代表数据类型，是两对，分别为：
+    *     ①  输入：KEYIN, VALUEIN
+    *          KEYIN：数据的偏移量，一行一行读数据，用来记录数据读到哪里了
+    *          VALUEIN：实际读取的具体的一行数据
+    *     ②  输出：KEYOUT, VALUEOUT
+    *          KEYOUT：单词
+    *          VALUEOUT：单词出现的数量（1）
+    */
+   public class CountMapper extends Mapper<LongWritable, Text,Text, IntWritable> {
+       /**
+        * (KEYOUT, VALUEOUT)
+        */
+       private Text outkey = new Text();
+       private IntWritable outValue = new IntWritable(1);
+       /**
+        *      * Called once for each key/value pair in the input split. Most applications
+        *      * should override this, but the default is the identity function.
+        * 该方法用来处理具体的业务逻辑
+        * @param key 输入数据的KEYIN，数据的偏移量
+        * @param value 输入数据的VALUEIN，实际读取的具体的一行数据
+        * @param context 上下文 在这里用来将数据写出去
+        * @throws IOException
+        * @throws InterruptedException
+        */
+       @Override
+       @SuppressWarnings("unchecked")
+       protected void map(LongWritable key, Text value,
+                          Context context) throws IOException, InterruptedException {
+           //1. 先将读进来的一行数据转换成String便于操作
+           String line = value.toString();
+           //2. 切割数据（按照空格切）
+           String[] words = line.split(" ");
+           //3. 遍历所有的单词并进行封装（K,V)
+           for (String word : words) {
+               //写数据
+               outkey.set(word);
+               context.write(outkey,outValue);
+           }
+       }
+   
+   }
+   
+   ```
+
+   ```java
+   package com.atguigu.wordcount;
+   
+   import org.apache.hadoop.io.IntWritable;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Reducer;
+   
+   import java.io.IOException;
+   
+   /**
+    * @author Mrs.An Xueying
+    * 2020/6/16 9:29
+    * 1. 自定义的类需要继承Reducer，Reducer的四个泛型如下：
+    * Reducer<KEYIN, VALUEIN, KEYOUT, VALUEOUT>代表数据类型，是两对，分别为：
+    *     ①  输入：KEYIN, VALUEIN
+    *          KEYIN：mapper中输出的key的类型
+    *          VALUEIN：mapper中输出的value的类型
+    *     ②  输出：KEYOUT, VALUEOUT
+    *          KEYOUT：单词
+    *          VALUEOUT：单词出现的数量（1）
+    */
+   public class CountReducer extends Reducer<Text, IntWritable, Text,IntWritable> {
+       /**
+        * KEYOUT  不用封装了，直接用key即可
+        * VALUEOUT
+        */
+       private IntWritable outValue = new IntWritable();
+       /**
+        * 该方法就是具体操作业务逻辑的方法
+        * （一组一组的读数据，key相同则为一组，因此一个key，对应一组value）
+        * @param key 单词
+        * @param values 相同单词的一组value
+        * @param context
+        * @throws IOException
+        * @throws InterruptedException
+        */
+       @Override
+       protected void reduce(Text key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
+           //累加value值
+           int sum = 0;
+           //遍历所有的value
+           for (IntWritable value : values) {
+               //value.get()：将IntWritable转成基本数据类型int
+               sum += value.get();
+               //封装（K,V）
+               outValue.set(sum);
+               //将数据写出去
+               context.write(key,outValue);
+           }
+       }
+   }
+   
+   ```
+
+3. 创建驱动类
+
+   ```java
+   package com.atguigu.wordcount;
+   
+   import org.apache.hadoop.conf.Configuration;
+   import org.apache.hadoop.fs.Path;
+   import org.apache.hadoop.io.IntWritable;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Job;
+   import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+   import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+   import java.io.IOException;
+   
+   /**
+    * @author Mrs.An Xueying
+    * 2020/6/16 9:29
+    * 驱动类
+    * 1， 作为程序的入口
+    * 2. 进行相关的一些关联
+    * 3. 参数的设置
+    */
+   public class CountDriver {
+   
+       /**
+        * 1. 获取job对象
+        * 2. 关联jar
+        * 3. 关联mapper和reducer
+        * 4. 设置mapper的输出类型
+        * 5. 设置最终（reducer）输出的key和value的类型
+        * 6. 设置输入输出路径
+        * 7. 提交job任务
+        * @param args
+        */
+   
+       public static void main(String[] args) throws IOException, ClassNotFoundException, InterruptedException {
+            // 1. 获取job对象
+           Job job = Job.getInstance(new Configuration());
+           //2. 关联jar
+           job.setJarByClass(CountDriver.class);
+           //3. 关联mapper和reducer
+           job.setMapperClass(CountMapper.class);
+           job.setReducerClass(CountReducer.class);
+           //4. 设置mapper的输出类型
+           job.setMapOutputKeyClass(Text.class);
+           job.setMapOutputValueClass(IntWritable.class);
+           //5. 设置最终（reducer）输出的key和value的类型
+           job.setOutputKeyClass(Text.class);
+           job.setOutputValueClass(IntWritable.class);
+           //6. 设置输入输出路径
+           FileInputFormat.setInputPaths(job,new Path("D:\\hdfstest\\input"));
+           //此目录必须不存在
+           FileOutputFormat.setOutputPath(job,new Path("D:\\hdfstest\\output"));
+           // 7. 提交job任务  参数true ：打印进度
+           boolean isSuccess = job.waitForCompletion(true);
+           //虚拟机退出的状态：0正常退出 1不正常退出
+           //System.exit(isSuccess?0:1);
+       }
+   }
+   ```
+
+4. 运行后，在`D:\\hdfstest\\output`路径中产生如下文件
+
+   ![image-20200616190034392](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616190034.png)
+
+5. 打开`part-r-00000`
+
+   ```
+   aa	3
+   ab	1
+   abc	1
+   ac	1
+   bb	2
+   cc	2
+   dd	2
+   ```
+
+#### 2. 在集群中运行MR任务（本地写好，提交到集群jar包）
+
+现在一般不写了，因为写起来很麻烦，容易出问题。后面会用hive封装，hive用sql写。但是要多练，要理解这个流程和思想。这样才有基础去做优化和看源码。
+
+1. 创建驱动类，把输入输出路径改成入参
+
+```java
+package com.atguigu.wordcount;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import java.io.IOException;
+
+/**
+ * 在集群中运行MR任务：
+ * 1. 路径问题 - 数据读取和输出的路径
+ * 2，打jar包（maven）
+ * 3. 思考 打jar包的时候需不需要将依赖的jar包打进包里
+ *      -  junit  不要
+ *      -  log4j  不要  集群里有
+ *      -  hadoop-client 不要 集群里有
+ */
+public class CountDriver2 {
+
+    public static void main(String[] args) throws IOException, ClassNotFoundException, InterruptedException {
+        // 1. 获取job对象
+        Job job = Job.getInstance(new Configuration());
+        //2. 关联jar
+        job.setJarByClass(CountDriver.class);
+        //3. 关联mapper和reducer
+        job.setMapperClass(CountMapper.class);
+        job.setReducerClass(CountReducer.class);
+        //4. 设置mapper的输出类型
+        job.setMapOutputKeyClass(Text.class);
+        job.setMapOutputValueClass(IntWritable.class);
+        //5. 设置最终（reducer）输出的key和value的类型
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+        //6. 设置输入输出路径  改成入参
+        FileInputFormat.setInputPaths(job,new Path(args[0]));
+        FileOutputFormat.setOutputPath(job,new Path(args[1]));
+        // 7. 提交job任务  参数true ：打印进度
+        boolean b = job.waitForCompletion(true);
+        //虚拟机退出的状态：0正常退出 1不正常退出
+        System.exit(b?0:1);
+    }
+}
+
+```
+
+2. 打包 package，改个名字，`mywordcount.jar`，放到hadoop102的/home/atguigu中
+
+3. 运行jar包
+
+   ```shell
+   # hadoop jar jar包名 要运行的类的全类名  输入路径（必须存在，且文件夹内放有要输入的数据） 输出路径（不能存在）
+   [atguigu@hadoop102 ~]$ hadoop jar mywordcount.jar com.atguigu.wordcount.CountDriver2 /input /output
+   ```
+
+4. 查看任务进度
+
+   ![image-20200616192718833](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616192718.png)
+
+5. 查看结果（与本地运行一致）
+
+   ![image-20200616192750720](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616192750.png)
+
+#### 3. 本地提交任务到集群
+
+1. 配置集群信息
+
+   ```java
+   package com.atguigu.wordcount;
+   
+   import org.apache.hadoop.conf.Configuration;
+   import org.apache.hadoop.fs.Path;
+   import org.apache.hadoop.io.IntWritable;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Job;
+   import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+   import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+   import java.io.IOException;
+   
+   /**
+    * 在本地提交任务到集群上
+    * 1.配置一些内容
+    * 2.打包：
+    *      打包前 ：job.setJarByClass(CountDriver3.class);
+    *      打包后 ：job.setJar("D:\\code\\hadoop\\target\\hadoop-1.0-SNAPSHOT.jar");
+    * 3.配置（给args传值）
+    *     VMOPTIONS :  -DHADOOP_USER_NAME=atguigu  (使用哪个用户操作集群)
+    *     PROGRAM ARGUMENTS ：hdfs://hadoop102:9820/input hdfs://hadoop102:9820/output （输入和输出路径）
+    */
+   public class CountDriver3 {
+       public static void main(String[] args) throws InterruptedException, IOException, ClassNotFoundException {
+           //用来设置配置内容的对象
+           Configuration conf = new Configuration();
+           //指定HDFS中NameNode的地址
+           conf.set("fs.defaultFS", "hdfs://hadoop102:9820");
+           //指定MR运行在Yarn上
+           conf.set("mapreduce.framework.name","yarn");
+           //指定MR可以在远程集群上运行
+           conf.set("mapreduce.app-submission.cross-platform","true");
+           //指定resourcemanager的位置
+           conf.set("yarn.resourcemanager.hostname","hadoop103");
+   
+           //        1.获取job对象
+           Job job = Job.getInstance(conf);
+   //        2.关联jar ---打包前需要配置的
+           job.setJarByClass(CountDriver3.class);
+           //指定jar包的路径---打包后需要配置的
+          // job.setJar("D:\\IdeaProjects\\myhadoop\\target\\myhadoop-1.0-SNAPSHOT.jar");
+   //        3.关联mapper和reducer
+           job.setMapperClass(CountMapper.class);
+           job.setReducerClass(CountReducer.class);
+   //        4.设置mapper的输出的key和value类型
+           job.setMapOutputKeyClass(Text.class);
+           job.setMapOutputValueClass(IntWritable.class);
+   //        5.设置最终(reducer)输出的key和value的类型
+           job.setOutputKeyClass(Text.class);
+           job.setOutputValueClass(IntWritable.class);
+   //        6.设置输入输出路径
+           FileInputFormat.setInputPaths(job,new Path(args[0]));
+           //注意 ：输出目录必须不存在
+           FileOutputFormat.setOutputPath(job,new Path(args[1]));
+   //        7.提交job任务
+           //boolean verbose是否打印进度
+           boolean isSuccess = job.waitForCompletion(true);
+           //虚拟机退出的状态 ：0是正常退出，1非正常退出
+   //        System.exit(isSuccess ? 0 : 1);
+   
+       }
+   }
+   
+   ```
+
+   
+
+2. 配置idea中运行参数
+
+   ![image-20200616195511797](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616195511.png)
+
+3. 打包，复制生成的包路径放到关联jar的位置，替换掉原来的setJarByClass
+
+   ![image-20200616195543763](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616195543.png)
+
+4. 运行，查看结果
+
+   ![image-20200616195659913](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616195700.png)
+
+#### 4. 统计客户手机流量（FlowBean）
+
+给定一批数据要求统计每个客户的手机流量
+
+![image-20200616232041404](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616232041.png)
+
+```
+1	13736230513	192.196.100.1	www.atguigu.com	2481	24681	200
+2	13846544121	192.196.100.2			264	0	200
+3 	13956435636	192.196.100.3			132	1512	200
+4 	13966251146	192.168.100.1			240	0	404
+5 	18271575951	192.168.100.2	www.atguigu.com	1527	2106	200
+6 	84188413	192.168.100.3	www.atguigu.com	4116	1432	200
+7 	13590439668	192.168.100.4			1116	954	200
+8 	15910133277	192.168.100.5	www.hao123.com	3156	2936	200
+9 	13729199489	192.168.100.6			240	0	200
+10 	13630577991	192.168.100.7	www.shouhu.com	6960	690	200
+11 	15043685818	192.168.100.8	www.baidu.com	3659	3538	200
+12 	15959002129	192.168.100.9	www.atguigu.com	1938	180	500
+13 	13560439638	192.168.100.10			918	4938	200
+14 	13470253144	192.168.100.11			180	180	200
+15 	13682846555	192.168.100.12	www.qq.com	1938	2910	200
+16 	13992314666	192.168.100.13	www.gaga.com	3008	3720	200
+17 	13509468723	192.168.100.14	www.qinghua.com	7335	110349	404
+18 	18390173782	192.168.100.15	www.sogou.com	9531	2412	200
+19 	13975057813	192.168.100.16	www.baidu.com	11058	48243	200
+20 	13768778790	192.168.100.17			120	120	200
+21 	13568436656	192.168.100.18	www.alibaba.com	2481	24681	200
+22 	13568436656	192.168.100.19			1116	954	200
+```
+
+1. 创建FlowBean
+
+```java
+package com.atguigu.writable;
+
+import org.apache.hadoop.io.Writable;
+
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/16 20:09
+ *
+ * 使用hadoop序列化框架
+ * 1. 自定义类并实现wirtable接口
+ * 2. 重写wirte和readFields方法
+ * 3. 读时数据的顺序必须和写时数据的顺序相同
+ */
+public class FlowBean implements Writable {
+    //上行流量
+    private long upFlow;
+    //下行流量
+    private long downFlow;
+    //总流量
+    private long sumFlow;
+
+    public FlowBean() {
+    }
+
+    public FlowBean(long upFlow, long downFlow) {
+        this.upFlow = upFlow;
+        this.downFlow = downFlow;
+        this.sumFlow = upFlow+downFlow;
+    }
+
+    /**
+     * 当我们通过reducer向外写数据时（对象）实际上调用的是toString方法
+     * @return
+     */
+    @Override
+    public String toString() {
+        return upFlow + " " + downFlow + " " + sumFlow;
+    }
+
+    public long getUpFlow() {
+        return upFlow;
+    }
+
+    public void setUpFlow(long upFlow) {
+        this.upFlow = upFlow;
+    }
+
+    public long getDownFlow() {
+        return downFlow;
+    }
+
+    public void setDownFlow(long downFlow) {
+        this.downFlow = downFlow;
+    }
+
+    public long getSumFlow() {
+        return sumFlow;
+    }
+
+    public void setSumFlow(long sumFlow) {
+        this.sumFlow = sumFlow;
+    }
+
+    /**
+     * 序列化：写
+     * @param out
+     * @throws IOException
+     */
+    public void write(DataOutput out) throws IOException {
+        out.writeLong(upFlow);
+        out.writeLong(downFlow);
+        out.writeLong(sumFlow);
+    }
+
+    /**
+     * 反序列化：读
+     * @param in
+     * @throws IOException
+     */
+    public void readFields(DataInput in) throws IOException {
+        upFlow = in.readLong();
+        downFlow = in.readLong();
+        sumFlow = in.readLong();
+    }
+}
+
+```
+
+2. 编写Map、Reduce类
+
+   ```java
+   package com.atguigu.writable;
+   
+   import org.apache.hadoop.io.LongWritable;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Mapper;
+   
+   import java.io.IOException;
+   
+   /**
+    * @author Mrs.An Xueying
+    * 2020/6/16 20:49
+    * LongWritable, Text  偏移量，一行数据
+    * Text,FlowBean  输出key，value
+    */
+   public class FlowMapper extends Mapper<LongWritable, Text,Text,FlowBean> {
+       private Text outKey = new Text();
+   
+       /**
+        * 读数据
+        * @param key 偏移量
+        * @param value 一行数据
+        * @param context 输出
+        * @throws IOException
+        * @throws InterruptedException
+        */
+       @Override
+       protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+           //分割数据
+           String[] phoneInfo = value.toString().split("\t");
+           //封装K,V
+           outKey.set(phoneInfo[1]);
+           //从数组中取出对应的数据，并转成long类型
+           long upFlow = Long.parseLong(phoneInfo[phoneInfo.length - 3]);
+           long downFlow = Long.parseLong(phoneInfo[phoneInfo.length - 2]);
+           //封装value
+           FlowBean flowBean = new FlowBean(upFlow, downFlow);
+           //写数据
+           context.write(outKey,flowBean);
+       }
+   }
+   
+   ```
+
+   ```java
+   package com.atguigu.writable;
+   
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Reducer;
+   
+   import java.io.IOException;
+   
+   /**
+    * @author Mrs.An Xueying
+    * 2020/6/16 21:00
+    */
+   public class FlowReducer extends Reducer<Text,FlowBean,Text,FlowBean> {
+       @Override
+       protected void reduce(Text key, Iterable<FlowBean> values, Context context)
+               throws IOException, InterruptedException {
+   
+           long upFlow = 0; //累加相同手机号的upflow
+           long downFlow = 0; //累加相同手机号的downflow
+           //遍历一组一组的数据
+           for (FlowBean value : values) {
+               //取出每一条数据的upflow,downflow并将upflow和downflow分别累加
+               upFlow += value.getUpFlow();
+               downFlow += value.getDownFlow();
+           }
+           //封装K,V
+           FlowBean outValue = new FlowBean(upFlow, downFlow);
+           //写出数据
+           context.write(key,outValue);
+       }
+   }
+   
+   ```
+
+   
+
+3. 编写驱动类
+
+   ```java
+   package com.atguigu.writable;
+   
+   import org.apache.hadoop.conf.Configuration;
+   import org.apache.hadoop.fs.Path;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Job;
+   import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+   import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+   
+   import java.io.IOException;
+   
+   /**
+    * @author Mrs.An Xueying
+    * 2020/6/16 21:00
+    */
+   public class FlowDriver {
+       /*
+            1.获取job对象
+            2.关联jar
+            3.关联mapper和reducer
+            4.设置mapper的输出的key和value类型
+            5.设置最终(reducer)输出的key和value的类型
+            6.设置输入输出路径
+            7.提交job任务
+         */
+       public static void main(String[] args) throws IOException, ClassNotFoundException, InterruptedException {
+   
+   //        1.获取job对象
+           Job job = Job.getInstance(new Configuration());
+   //        2.关联jar
+           job.setJarByClass(FlowDriver.class);
+   //        3.关联mapper和reducer
+           job.setMapperClass(FlowMapper.class);
+           job.setReducerClass(FlowReducer.class);
+   //        4.设置mapper的输出的key和value类型
+           job.setMapOutputKeyClass(Text.class);
+           job.setMapOutputValueClass(FlowBean.class);
+   //        5.设置最终(reducer)输出的key和value的类型
+           job.setOutputKeyClass(Text.class);
+           job.setOutputValueClass(FlowBean.class);
+   //        6.设置输入输出路径
+           FileInputFormat.setInputPaths(job,new Path("D:\\hdfstest\\input"));
+           FileOutputFormat.setOutputPath(job,new Path("D:\\hdfstest\\output"));
+   //        7.提交job任务
+           job.waitForCompletion(true);
+   
+       }
+   }
+   
+   ```
+
+   
+
+4. 查看结果
+
+   ![image-20200616225733438](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616225733.png)
+
+#### 5. 注意
+
+1. 任务提交给yarn才能看到任务状态，否则可以用waitForCompletion的返回值来确定任务是否正常运行完成。
+
+2. 想在控制台显示任务进度信息，需要在resources中加入`log4j2.xml`
+
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <Configuration status="error" strict="true" name="XMLConfig">
+       <Appenders>
+           <!-- 类型名为Console，名称为必须属性 -->
+           <Appender type="Console" name="STDOUT">
+               <!-- 布局为PatternLayout的方式，
+               输出样式为[INFO] [2018-01-22 17:34:01][org.test.Console]I'm here -->
+               <Layout type="PatternLayout"
+                       pattern="[%p] [%d{yyyy-MM-dd HH:mm:ss}][%c{10}]%m%n" />
+           </Appender>
+   
+       </Appenders>
+   
+       <Loggers>
+           <!-- 可加性为false -->
+           <Logger name="test" level="info" additivity="false">
+               <AppenderRef ref="STDOUT" />
+           </Logger>
+   
+           <!-- root loggerConfig设置 -->
+           <Root level="info">
+               <AppenderRef ref="STDOUT" />
+           </Root>
+       </Loggers>
+   </Configuration>
+   
+   ```
+
+
+3. 运行时出现问题![image-20200617010821309](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200617010821.png)
+
+   可以看看是否是输出结果文件夹已存在
+
+4. hadoop环境变量问题![image-20200617010901910](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200617010902.png)
+
+   一定要设置对
+
+   ![image-20200616200037404](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616200037.png)
+
+5. Windows中c盘system32要放入hadoop的三个文件：
+
+   -  hadoop.dll
+   -  winutils.exe
+   - libwinutils.lib
+
+6. 发生正常生成output文件夹，但其中没内容，任务进度0%就停止，很有可能是数据类型的包导错了，如Text。
+
+7. 报错如下![image-20200617010659527](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200617010659.png)
+
+   请检查4、5，并使hadoop版本（本地）与配置文件版本一致
+
 ## 3. MapReduce框架原理
+
+### 1. InputFormat数据输入
+
+![image-20200616232840558](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616232840.png)
+
+1. 过程：Map阶段  -----> shuffle阶段 ------> Reduce阶段
+   注意：shuffle阶段的前一半属于Map阶段，后一半属性Reduce阶段
+
+   比如：上学-午休-放学
+
+2. MR数据流：输入数据 ---> InputFormat （FileInputFormat）-----> Mapper-----> Shuffle ------> Reducer -----> OutputFormat ----> 输出数据
+
+   比如：来学校-上课-学习-午休-上课-学习-离开学校
+
+3. 从MapTask和ReduceTask去看：
+
+   1. MapTask和ReduceTask都是线程
+
+   2. MapTask源码
+
+      ```java
+      // If there are reducers then the entire attempt's progress will be 
+      // split between the map phase (67%) and the sort phase (33%).
+      mapPhase = getProgress().addPhase("map", 0.667f);
+      sortPhase  = getProgress().addPhase("sort", 0.333f);
+      ```
+
+   3. ReduceTask源码
+
+      ```java
+      copyPhase = getProgress().addPhase("copy");
+      sortPhase  = getProgress().addPhase("sort");
+      reducePhase = getProgress().addPhase("reduce");
+      ```
+
+      比如：每天上课5个小时，午休2个小时，来回路上2个小时，分别是坐车去和走回来。每天课程分别为语数外。
+
+   4. 总结：map ----> sort ---> copy ---> sort ---->reduce
+
+   5. shuffle就是其中的`sort ---> copy ---> sort`
+
+#### 1. 切片与MapTask并行度决定机制
+
+#### 2. Job提交流程源码和切片源码详解
+
+##### **DEBUG**
+
+![image-20200616235322007](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200616235322.png)
+
+
+
+##### 查看job提交流程源码
+
+1. waitForCompletion方法处打断点，进入方法
+
+2. 源码
+
+   ```java
+   public boolean waitForCompletion(boolean verbose
+                                      ) throws IOException, InterruptedException,
+                                               ClassNotFoundException {
+       //此处是为了防止重复提交                                            
+       if (state == JobState.DEFINE) {
+         //提交任务，进入方法，继续看源码
+         submit();
+       }
+       if (verbose) {
+         monitorAndPrintJob();
+       } else {
+         // get the completion poll interval from the client.
+         int completionPollIntervalMillis = 
+           Job.getCompletionPollInterval(cluster.getConf());
+         while (!isComplete()) {
+           try {
+             Thread.sleep(completionPollIntervalMillis);
+           } catch (InterruptedException ie) {
+           }
+         }
+       }
+       return isSuccessful();
+     }
+   
+   /**
+      * Submit the job to the cluster and return immediately.
+      * @throws IOException
+      */
+     public void submit() 
+            throws IOException, InterruptedException, ClassNotFoundException {
+       //再次验证状态
+       ensureState(JobState.DEFINE);
+       //调用新的API
+       setUseNewAPI();
+       //获取连接，进入看源码
+       connect();
+         //out出来之后 这里创建了对象，这里主要是看任务到底是提交到集群上还是本地上
+       final JobSubmitter submitter = 
+           getJobSubmitter(cluster.getFileSystem(), cluster.getClient());
+       status = ugi.doAs(new PrivilegedExceptionAction<JobStatus>() {
+         public JobStatus run() throws IOException, InterruptedException, 
+         ClassNotFoundException {
+             //拿到了JobSubmitter 在此处打断点
+           return submitter.submitJobInternal(Job.this, cluster);
+         }
+       });
+       state = JobState.RUNNING;
+       LOG.info("The url to track the job: " + getTrackingURL());
+      }
+   
+     private synchronized void connect()
+             throws IOException, InterruptedException, ClassNotFoundException {
+       //判断节点是集群还是本地
+       if (cluster == null) {
+         cluster =   //调用方法
+           ugi.doAs(new PrivilegedExceptionAction<Cluster>() {  //内部类
+                      public Cluster run()
+                             throws IOException, InterruptedException, 
+                                    ClassNotFoundException {
+                          //
+                        return new Cluster(getConfiguration());//在本行打断点进入
+                      }
+                    });
+       }
+     }
+   
+     //构造器   参数：conf 配置文件
+     public Cluster(Configuration conf) throws IOException {
+         //另外一个构造器
+       this(null, conf);
+     }
+   
+   //另外一个构造器
+     public Cluster(InetSocketAddress jobTrackAddr, Configuration conf) 
+         throws IOException {
+         //配置文件
+       this.conf = conf;
+         //机器名称
+       this.ugi = UserGroupInformation.getCurrentUser();
+         //在这里进入方法
+       initialize(jobTrackAddr, conf);
+     }
+   
+     private void initialize(InetSocketAddress jobTrackAddr, Configuration conf)
+         throws IOException {
+   
+       initProviderList();
+       final IOException initEx = new IOException(
+           "Cannot initialize Cluster. Please check your configuration for "
+               + MRConfig.FRAMEWORK_NAME
+               + " and the correspond server addresses.");
+       if (jobTrackAddr != null) {
+         LOG.info(
+             "Initializing cluster for Job Tracker=" + jobTrackAddr.toString());
+       }
+       for (ClientProtocolProvider provider : providerList) {
+         LOG.debug("Trying ClientProtocolProvider : "
+             + provider.getClass().getName());
+         ClientProtocol clientProtocol = null;
+         try {
+           if (jobTrackAddr == null) {
+               //在此处打节点，跳到这里，进入方法  //还有第二次进，配置了就有配置的值，否则此时就会有一个默认值local 创建一个localjobrunner
+             clientProtocol = provider.create(conf);
+           } else {
+             clientProtocol = provider.create(jobTrackAddr, conf);
+           }
+   		//再次验证为null进入else，再次try
+           if (clientProtocol != null) {
+             clientProtocolProvider = provider;
+             client = clientProtocol;
+             LOG.debug("Picked " + provider.getClass().getName()
+                 + " as the ClientProtocolProvider");
+             break;
+           } else {
+             LOG.debug("Cannot pick " + provider.getClass().getName()
+                 + " as the ClientProtocolProvider - returned null protocol");
+           }
+         } catch (Exception e) {
+           final String errMsg = "Failed to use " + provider.getClass().getName()
+               + " due to error: ";
+           initEx.addSuppressed(new IOException(errMsg, e));
+           LOG.info(errMsg, e);
+         }
+       }
+   
+       if (null == clientProtocolProvider || null == client) {
+         throw initEx;
+       }
+     }
+   
+   //mapreduce.framework.name 本地任务没做配置就没有这个值
+       public ClientProtocol create(Configuration conf) throws IOException {
+           //查看get
+           //有则创建YARNRunner，没有返回null
+           return "yarn".equals(conf.get("mapreduce.framework.name")) ? new YARNRunner(conf) : null;
+       }
+   
+   
+   public String get(String name) {
+       //遍历，找结果
+           String[] names = this.handleDeprecation((Configuration.DeprecationContext)deprecationContext.get(), name);
+           String result = null;
+           String[] var4 = names;
+           int var5 = names.length;
+   		
+           for(int var6 = 0; var6 < var5; ++var6) {
+               String n = var4[var6];
+               result = this.substituteVars(this.getProps().getProperty(n));
+           }
+   
+           return result;
+       }
+   
+     JobStatus submitJobInternal(Job job, Cluster cluster) 
+     throws ClassNotFoundException, InterruptedException, IOException {
+   
+       //validate the jobs output specs 
+         //路径检查 输出路径存不存在
+       checkSpecs(job);
+   
+       Configuration conf = job.getConfiguration();
+       addMRFrameworkToDistributedCache(conf);
+   
+         //重点：打断点
+         //得到一个路径，在本地提交任务到集群的过程中，会在一个目录中放置一些配置信息（切片信息、配置信息等 ），这些配置信息和任务一起发布到集群上
+       Path jobStagingArea = JobSubmissionFiles.getStagingDir(cluster, conf);
+       //configure the command line options correctly on the submitting dfs
+       InetAddress ip = InetAddress.getLocalHost();
+       if (ip != null) {
+         submitHostAddress = ip.getHostAddress();
+         submitHostName = ip.getHostName();
+         conf.set(MRJobConfig.JOB_SUBMITHOST,submitHostName);
+         conf.set(MRJobConfig.JOB_SUBMITHOSTADDR,submitHostAddress);
+       }
+         //生成jobid
+       JobID jobId = submitClient.getNewJobID();
+         //设置jobid
+       job.setJobID(jobId);
+         //把目录拼到一起
+       Path submitJobDir = new Path(jobStagingArea, jobId.toString());
+       JobStatus status = null;
+       try {
+         conf.set(MRJobConfig.USER_NAME,
+             UserGroupInformation.getCurrentUser().getShortUserName());
+         conf.set("hadoop.http.filter.initializers", 
+             "org.apache.hadoop.yarn.server.webproxy.amfilter.AmFilterInitializer");
+         conf.set(MRJobConfig.MAPREDUCE_JOB_DIR, submitJobDir.toString());
+         LOG.debug("Configuring job " + jobId + " with " + submitJobDir 
+             + " as the submit dir");
+         // get delegation token for the dir
+         TokenCache.obtainTokensForNamenodes(job.getCredentials(),
+             new Path[] { submitJobDir }, conf);
+         
+         populateTokenCache(conf, job.getCredentials());
+   
+         // generate a secret to authenticate shuffle transfers
+         if (TokenCache.getShuffleSecretKey(job.getCredentials()) == null) {
+           KeyGenerator keyGen;
+           try {
+             keyGen = KeyGenerator.getInstance(SHUFFLE_KEYGEN_ALGORITHM);
+             keyGen.init(SHUFFLE_KEY_LENGTH);
+           } catch (NoSuchAlgorithmException e) {
+             throw new IOException("Error generating shuffle secret key", e);
+           }
+           SecretKey shuffleKey = keyGen.generateKey();
+           TokenCache.setShuffleSecretKey(shuffleKey.getEncoded(),
+               job.getCredentials());
+         }
+         if (CryptoUtils.isEncryptedSpillEnabled(conf)) {
+           conf.setInt(MRJobConfig.MR_AM_MAX_ATTEMPTS, 1);
+           LOG.warn("Max job attempts set to 1 since encrypted intermediate" +
+                   "data spill is enabled");
+         }
+   
+           //job 和 目录 -->配置文件
+         copyAndConfigureFiles(job, submitJobDir);
+   
+           //拼出来的目录
+         Path submitJobFile = JobSubmissionFiles.getJobConfPath(submitJobDir);
+         
+         // Create the splits for the job
+         LOG.debug("Creating splits at " + jtFs.makeQualified(submitJobDir));
+           //调用writeSplits方法写切片信息
+         int maps = writeSplits(job, submitJobDir);
+         conf.setInt(MRJobConfig.NUM_MAPS, maps);
+         LOG.info("number of splits:" + maps);
+   
+         int maxMaps = conf.getInt(MRJobConfig.JOB_MAX_MAP,
+             MRJobConfig.DEFAULT_JOB_MAX_MAP);
+         if (maxMaps >= 0 && maxMaps < maps) {
+           throw new IllegalArgumentException("The number of map tasks " + maps +
+               " exceeded limit " + maxMaps);
+         }
+   
+         // write "queue admins of the queue to which job is being submitted"
+         // to job file.
+         String queue = conf.get(MRJobConfig.QUEUE_NAME,
+             JobConf.DEFAULT_QUEUE_NAME);
+         AccessControlList acl = submitClient.getQueueAdmins(queue);
+         conf.set(toFullPropertyName(queue,
+             QueueACL.ADMINISTER_JOBS.getAclName()), acl.getAclString());
+   
+         // removing jobtoken referrals before copying the jobconf to HDFS
+         // as the tasks don't need this setting, actually they may break
+         // because of it if present as the referral will point to a
+         // different job.
+         TokenCache.cleanUpTokenReferral(conf);
+   
+         if (conf.getBoolean(
+             MRJobConfig.JOB_TOKEN_TRACKING_IDS_ENABLED,
+             MRJobConfig.DEFAULT_JOB_TOKEN_TRACKING_IDS_ENABLED)) {
+           // Add HDFS tracking ids
+           ArrayList<String> trackingIds = new ArrayList<String>();
+           for (Token<? extends TokenIdentifier> t :
+               job.getCredentials().getAllTokens()) {
+             trackingIds.add(t.decodeIdentifier().getTrackingId());
+           }
+           conf.setStrings(MRJobConfig.JOB_TOKEN_TRACKING_IDS,
+               trackingIds.toArray(new String[trackingIds.size()]));
+         }
+   
+         // Set reservation info if it exists
+         ReservationId reservationId = job.getReservationId();
+         if (reservationId != null) {
+           conf.set(MRJobConfig.RESERVATION_ID, reservationId.toString());
+         }
+   
+         // Write job file to submit dir
+           //写配置信息
+         writeConf(conf, submitJobFile);
+         
+         //
+         // Now, actually submit the job (using the submit name)
+         //
+         printTokens(jobId, job.getCredentials());
+           //提交任务了!!
+         status = submitClient.submitJob(
+             jobId, submitJobDir.toString(), job.getCredentials());
+         if (status != null) {
+           return status;
+         } else {
+           throw new IOException("Could not launch job");
+         }
+       } finally {
+         if (status == null) {
+           LOG.info("Cleaning up the staging area " + submitJobDir);
+           if (jtFs != null && submitJobDir != null)
+             jtFs.delete(submitJobDir, true);
+   
+         }
+       }
+     }
+     
+   ```
+
+   ![image-20200617004606399](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200617004606.png)
+
+   本地目录中存放的job配置信息会随着任务的提交而消失
+
+3. job的主要任务
+
+   1. 往本地提交or集群
+   2. 往本地写job的配置信息（提交完就没了）
+   3. 提交任务
+
+```java
+开始提交任务
+waitForCompletion()
+submit();
+
+1.建立连接
+connect();	
+		
+	1.1创建提交Job的代理
+		new Cluster(getConfiguration());
+	1.2判断是本地yarn还是远程
+		initialize(jobTrackAddr, conf); 
+
+2. 提交job
+	submitter.submitJobInternal(Job.this, cluster)
+	2.1创建给集群提交数据的Stag路径
+		Path jobStagingArea = JobSubmissionFiles.getStagingDir(cluster, conf);
+
+	2.2获取jobid ，并创建Job路径
+		JobID jobId = submitClient.getNewJobID();
+
+	2.3拷贝jar包到集群
+		copyAndConfigureFiles(job, submitJobDir);	
+			rUploader.uploadFiles(job, jobSubmitDir);
+
+	2.4计算切片，生成切片规划文件
+		writeSplits(job, submitJobDir);
+		maps = writeNewSplits(job, jobSubmitDir);
+		input.getSplits(job);
+
+	2.5向Stag路径写XML配置文件
+		writeConf(conf, submitJobFile);
+		conf.writeXml(out);
+
+	2.6提交Job,返回提交状态
+		status = submitClient.submitJob(jobId, submitJobDir.toString(), job.getCredentials());
+
+```
+
+![image-20200617005047945](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200617005048.png)
+
+#### 3. FileInputFormat切片机
+
+![image-20200617005127758](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200617005127.png)制
+
+
+
+#### 4. CombineTextInputFormat切片机制
+
+#### 5. CombineTextInputFormat案例实操
+
+#### 6. TestInputFormat的KV
+
+### 2. MapReduce工作流程
+
+### 3. Shuffle机制
+
+#### 1. Shuffle机制
+
+#### 2. Partition分区
+
+#### 3. Partition分区案例实操
+
+#### 4. WritebleComparable排序
+
+#### 5. WritebleComparable排序（全排序）
+
+#### 6. WritebleComparable排序（区内排序）
+
+#### 7. Combiner合并
+
+#### 8. Combiner合并案例实操
+
+### 4. MapTask工作机制
+
+### 5. ReduceTask工作机制
+
+### 6. OutputFormat数据输出
+
+#### 1. OutputFormat接口实现类
+
+#### 2. 自定义OutputFormat
+
+#### 3. 自定义OutputFormat案例实操
+
+### 7. Join多种应用
+
+#### 1. Reduce Join
+
+#### 2. Reduce Join案例实操
+
+#### 3. Map Join
+
+#### 4. Map Join案例实操
+
+### 8. 计数器应用
+
+### 9. 数据清洗（ETL）
+
+### 10. MapReduce开发总结
 
 # 四、Yarn
 
@@ -3036,3 +4277,14 @@ java的序列化是重量级的序列化框架（Serializable），会有许多�
 
 ## 6. MapReduce&Yarn常见错误及解决方案
 
+1. 运行任务时发生
+
+```
+Failed to execute goal org.codehaus.mojo:exec-maven-plugin:3.0.0:exec (default-cli) on project myhadoop: Command execution failed.
+```
+
+一般是输入输出路径的问题。如：输出目录已存在，将结果输出目录换成不存在的目录即可
+
+2. 找不到hadoop包
+
+   
