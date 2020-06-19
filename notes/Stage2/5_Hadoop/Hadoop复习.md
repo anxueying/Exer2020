@@ -4766,37 +4766,1084 @@ public class MyPartitioner extends Partitioner<Text,FlowBean> {
 
 #### 6. WritebleComparable排序（区内排序）
 
+
+
+##### 自定义排序比较器对象
+
+代码有点问题（数据类型）
+
 #### 7. Combiner合并
+
+Combiner出现：（都是运行在MapTask阶段）
+
+1. 环形缓冲区溢写时
+2. 排序好写入磁盘时
+
+Combiner是：
+
+1. 父类是Reducer
+2. MR中Mapper和Reducer之外的一种组件
+3. 与父类的区别在于运行位置
+
+局部汇总的好处：
+
+1. 节省磁盘空间
+2. 节省网络IO资源
+
+缺点：局部汇总可能会影响业务逻辑，因此不是默认添加，需手动。如取平均数。
+
+```
+3 + 5 + 7  -->  15/3 = 5
+2 + 6  -->  2+6/2 = 4
+4+5  -->  9/2 = 4.5?                   局部汇总
+--------------------------------------------
+3+5+7+2+6/5 = 23/5 = 4.6?              非局部汇总
+```
 
 #### 8. Combiner合并案例实操
 
+```java
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/19 10:09  在reducer的基础上，改了一下类名而已
+ */
+public class Combiner extends Reducer<Text, IntWritable, Text,IntWritable> {
+    private IntWritable outValue = new IntWritable();//输出的value的类型
+    /**
+     * 该方法就是具体操作业务逻辑的方法
+     * 注意 ：一组一组的读取数据。key相同则为一组
+     * @param key ：单词
+     * @param values ：相同单词的一组value
+     * @param context : 上下文（在这用来将数据写出去）
+     * @throws IOException
+     * @throws InterruptedException
+     */
+    @Override
+    protected void reduce(Text key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
+
+        int sum = 0;//用来累加value值
+        //遍历所有的value
+        for (IntWritable value : values) {
+            //value.get() : 将IntWritable转成基本数据类型
+            sum += value.get();
+        }
+        //封装（K,V）
+        outValue.set(sum);
+        //将数据写出去
+        context.write(key,outValue);
+    }
+
+}
+
+```
+
+左侧：没使用Combiner；右侧：使用Combiner
+
+![img](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200619101648.png)
+
 ### 4. MapTask工作机制
 
+![image-20200619210953099](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200619210953.png)
+
+（1）Read阶段：MapTask通过用户编写的RecordReader，从输入InputSplit中解析出一个个key/value。
+
+​    （2）Map阶段：该节点主要是将解析出的key/value交给用户编写map()函数处理，并产生一系列新的key/value。
+
+​    （3）Collect收集阶段：在用户编写map()函数中，当数据处理完成后，一般会调用OutputCollector.collect()输出结果。在该函数内部，它会将生成的key/value分区（调用Partitioner），并写入一个环形内存缓冲区中。
+
+​    （4）Spill阶段：即“溢写”，当环形缓冲区满后，MapReduce会将数据写到本地磁盘上，生成一个临时文件。需要注意的是，将数据写入本地磁盘之前，先要对数据进行一次本地排序，并在必要时对数据进行合并、压缩等操作。
+
+​    溢写阶段详情：
+
+​    步骤1：利用快速排序算法对缓存区内的数据进行排序，排序方式是，先按照分区编号Partition进行排序，然后按照key进行排序。这样，经过排序后，数据以分区为单位聚集在一起，且同一分区内所有数据按照key有序。
+
+​    步骤2：按照分区编号由小到大依次将每个分区中的数据写入任务工作目录下的临时文件output/spillN.out（N表示当前溢写次数）中。如果用户设置了Combiner，则写入文件之前，对每个分区中的数据进行一次聚集操作。
+
+​    步骤3：将分区数据的元信息写到内存索引数据结构SpillRecord中，其中每个分区的元信息包括在临时文件中的偏移量、压缩前数据大小和压缩后数据大小。如果当前内存索引大小超过1MB，则将内存索引写到文件output/spillN.out.index中。
+
+​    （5）Combine阶段：当所有数据处理完成后，MapTask对所有临时文件进行一次合并，以确保最终只会生成一个数据文件。
+
+​    当所有数据处理完后，MapTask会将所有临时文件合并成一个大文件，并保存到文件output/file.out中，同时生成相应的索引文件output/file.out.index。
+
+​    在进行文件合并过程中，MapTask以分区为单位进行合并。对于某个分区，它将采用多轮递归合并的方式。每轮合并io.sort.factor（默认10）个文件，并将产生的文件重新加入待合并列表中，对文件排序后，重复以上过程，直到最终得到一个大文件。
+
+​    让每个MapTask最终只生成一个数据文件，可避免同时打开大量文件和同时读取大量小文件产生的随机读取带来的开销。
+
 ### 5. ReduceTask工作机制
+
+![image-20200619211645482](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200619211645.png)
+
+（1）Copy阶段：ReduceTask从各个MapTask上远程拷贝一片数据，并针对某一片数据，如果其大小超过一定阈值，则写到磁盘上，否则直接放到内存中。
+
+​    （2）Merge阶段：在远程拷贝数据的同时，ReduceTask启动了两个后台线程对内存和磁盘上的文件进行合并，以防止内存使用过多或磁盘上文件过多。
+
+​    （3）Sort阶段：按照MapReduce语义，用户编写reduce()函数输入数据是按key进行聚集的一组数据。为了将key相同的数据聚在一起，Hadoop采用了基于排序的策略。由于各个MapTask已经实现对自己的处理结果进行了局部排序，因此，ReduceTask只需对所有数据进行一次归并排序即可。
+
+​    （4）Reduce阶段：reduce()函数将计算结果写到HDFS上。
+
+**设置ReduceTask并行度（个数）**
+
+ReduceTask的并行度同样影响整个Job的执行并发度和执行效率，但与MapTask的并发数由切片数决定不同，ReduceTask数量的决定是可以直接手动设置：
+
+// 默认值是1，手动设置为4
+
+```java
+job.setNumReduceTasks(4);
+```
+
+**实验：测试ReduceTask多少合适**
+
+（1）实验环境：1个Master节点，16个Slave节点：CPU:8GHZ，内存: 2G ，数据量为1GB
+
+（2）实验结论：   MapTask =16  
+
+| ReduceTask | 1    | 5    | 10   | 15   | 16   | 20   | 25   | 30   | 45   | 60   |
+| ---------- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| 总时间     | 892  | 146  | 110  | 92   | 88   | 100  | 128  | 101  | 145  | 104  |
+
+**注意事项**
+
+1. ReduceTask=0，表示没有Reduce阶段，输出文件个数和Map个数一致
+2. ReduceTask默认值就是1，所以输出文件个数为一个
+3. 如果数据分布不均匀，就有可能在Reduce阶段产生数据倾斜
+4. ReduceTask数量不是任意设置，要考虑业务逻辑需求，有时需要计算全局汇总结果，那只能有1个ReduceTask
+5. 具体多少reducetask根据集群性能而定
+6. 如果分区不是1，ReduceTask为1，则不执行分区过程。（在源码中，执行分区的前提是判断ReduceNum个数是否大于1.不大于1肯定不执行）
 
 ### 6. OutputFormat数据输出
 
 #### 1. OutputFormat接口实现类
 
+1. TextOutputFormat 文本输出
+
+   默认，把每条记录写成文本行。键值可以是任意类型，调用toString方法可将键值转换为字符串。
+
+2. SequenceFileOutputFormat 
+
+   易压缩
+
+3. 自定义OutputFormat
+
+```java
+public abstract class OutputFormat<K, V> {
+
+    /*
+    获取recordwriter对象，该对象是用来写数据的
+     */
+  public abstract RecordWriter<K, V> 
+    getRecordWriter(TaskAttemptContext context
+                    ) throws IOException, InterruptedException;
+
+  /*检查输出路径*/
+  public abstract void checkOutputSpecs(JobContext context
+                                        ) throws IOException, 
+                                                 InterruptedException;
+
+    
+  public abstract 
+  OutputCommitter getOutputCommitter(TaskAttemptContext context
+                                     ) throws IOException, InterruptedException;
+}
+```
+
+##### 继承树
+
+|-----OutputFormat
+
+​	|-----FileOutputFormat 重写了checkOutputSpecs(检查输出路径)
+
+​		|-----TextOutputFormat（默认使用）重写了getRecordWriter，其中会new一个LineRecordWriter 对象。它是真正写数据时使用的对象
+
+​		|-----SequenceFileoutputFormat 写出来的事序列化后的数据
+
+![image-20200619102710888](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200619102711.png)
+
+
+
+```java
+//检查路径是FileOutputFormat实现  
+/*
+job提交的时候调用了InputFormat,OutputFormat中的两个部分
+InputFormat--- split  切片
+OutputFormat --- checkOutputSpecs  检查路径
+*/
+  public void checkOutputSpecs(JobContext job
+                               ) throws FileAlreadyExistsException, IOException{
+    // Ensure that the output directory is set and not already there
+    Path outDir = getOutputPath(job);
+    if (outDir == null) {
+      throw new InvalidJobConfException("Output directory not set.");
+    }
+
+    // get delegation token for outDir's file system
+    TokenCache.obtainTokensForNamenodes(job.getCredentials(),
+        new Path[] { outDir }, job.getConfiguration());
+
+      //目录已存在的时候，抛FileAlreadyExistsException异常
+    if (outDir.getFileSystem(job.getConfiguration()).exists(outDir)) {
+      throw new FileAlreadyExistsException("Output directory " + outDir + 
+                                           " already exists");
+    }
+  }
+
+//FileOutputFormat没有实现  RecordWriter，其子类 TextOutputFormat(默认) 实现
+public RecordWriter<K, V> 
+         getRecordWriter(TaskAttemptContext job
+                         ) throws IOException, InterruptedException {
+    Configuration conf = job.getConfiguration();
+    boolean isCompressed = getCompressOutput(job);
+    String keyValueSeparator= conf.get(SEPARATOR, "\t");
+    CompressionCodec codec = null;
+    String extension = "";
+    if (isCompressed) {
+      Class<? extends CompressionCodec> codecClass = 
+        getOutputCompressorClass(job, GzipCodec.class);
+      codec = ReflectionUtils.newInstance(codecClass, conf);
+      extension = codec.getDefaultExtension();
+    }
+    Path file = getDefaultWorkFile(job, extension);
+    FileSystem fs = file.getFileSystem(conf);
+    FSDataOutputStream fileOut = fs.create(file, false);
+    if (isCompressed) {
+      return new LineRecordWriter<>(
+          new DataOutputStream(codec.createOutputStream(fileOut)),
+          keyValueSeparator);
+    } else {
+        //一行一行写  默认
+      return new LineRecordWriter<>(fileOut, keyValueSeparator);
+    }
+  }
+```
+
+**SequenceFileOutputFormat**
+
+序列化后的数据（二进制数据），格式紧凑，很容易被压缩。可以拿这个数据做一些后续的事。
+
+```java
+//使用SequenceFileOutputFormat
+        job.setOutputFormatClass(SequenceFileOutputFormat.class);
+```
+
 #### 2. 自定义OutputFormat
 
+实现控制最终文件的**输出路径**和**输出格式**。
+
+步骤：
+
+1. 自定义类继承FileOutputFormat
+2. 改写RecordWriter，具体改写输出数据的方法write()
+
+
+
 #### 3. 自定义OutputFormat案例实操
+
+过滤输入的log日志，包含atguigu的网站输出到e:/atguigu.log，不包含atguigu的网站输出到e:/other.log。
+
+```java
+public class MyOutputFormat extends FileOutputFormat<LongWritable, Text> {
+
+    @Override
+    public RecordWriter<LongWritable, Text> getRecordWriter(TaskAttemptContext job) throws IOException, InterruptedException {
+        return new MyRecordWriter(job);
+    }
+}
+```
+
+```java
+package com.atguigu.outputformat;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.RecordWriter;
+import org.apache.hadoop.mapreduce.TaskAttemptContext;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+import java.io.IOException;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/19 10:53
+ * 自定义RecordWriter
+ * <p>
+ * 没有Mapper和Reducer
+ * K : 读取数据的偏移量
+ * V : 一行一行的数据
+ */
+public class MyRecordWriter extends RecordWriter<LongWritable, Text> {
+    FSDataOutputStream atguigu;
+    FSDataOutputStream other;
+
+    /**
+     * 开流（获取Hadoop的流）
+     * 在构造器里做，构造器只执行一次
+     *
+     * @param job
+     */
+    public MyRecordWriter(TaskAttemptContext job) throws IOException {
+        //获取文件系统 这里不要new Configuration，到了这里一定已经有配置文件了
+        //获取配置文件
+        Configuration conf = job.getConfiguration();
+        //获取文件系统
+        FileSystem fs = FileSystem.get(conf);
+        //创建输出流  creat/open 写死路径
+//        atguigu = fs.create(new Path(FileOutputFormat.getOutputPath(job) + "/atguigu.log") );
+//        other = fs.create(new Path(FileOutputFormat.getOutputPath(job) + "/other.log"));
+        //这样写更符合需求
+        atguigu = fs.create(new Path(FileOutputFormat.getOutputPath(job) + "/" + conf.get("atguigu.filename")));
+        other = fs.create(new Path(FileOutputFormat.getOutputPath(job) + "/" + conf.get("other.filename")));
+
+    }
+
+    /**
+     * 写数据
+     * 一直调用的，循环调用，所以不能在这里关流！！
+     *
+     * @param key   偏移量
+     * @param value 一行一行的数据
+     * @throws IOException
+     * @throws InterruptedException
+     */
+    @Override
+    public void write(LongWritable key, Text value) throws IOException, InterruptedException {
+        //1. 判断 有没有atguigu
+        //2. 写数据  需要流  在Hadoop框架中用这个框架中的流
+        String address = value.toString() + "\n";
+        if (address.contains("atguigu")) {
+            //写到atguigu.log
+            atguigu.write(address.getBytes());
+        } else {
+            //写到other.log
+            other.write(address.getBytes());
+        }
+    }
+
+    @Override
+    public void close(TaskAttemptContext context) throws IOException, InterruptedException {
+        IOUtils.closeStream(atguigu);
+        IOUtils.closeStream(other);
+    }
+}
+
+```
+
+```java
+package com.atguigu.outputformat;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+import java.io.IOException;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/19 10:51
+ */
+public class OutputFormatDriver {
+    public static void main(String[] args) throws IOException, ClassNotFoundException, InterruptedException {
+
+        Configuration conf = new Configuration();
+        conf.set("atguigu.filename", "atguigu.log");
+        conf.set("other.filename", "other.log");
+        Job job = Job.getInstance(conf);
+
+        //如果是本地模式可以不写
+        job.setJarByClass(OutputFormatDriver.class);
+
+        //设置outputformat的类
+        job.setOutputFormatClass(MyOutputFormat.class);
+
+        //数据输入路径
+        FileInputFormat.setInputPaths(job, new Path("D:\\IdeaProjects\\myhadoop\\src\\hdfstest\\input_outputformat"));
+
+        //指明输出路径
+        FileOutputFormat.setOutputPath(job, new Path("D:\\IdeaProjects\\myhadoop\\src\\hdfstest\\output_outputformat"));
+
+        //提交任务
+        job.waitForCompletion(true);
+    }
+}
+
+```
+
+
 
 ### 7. Join多种应用
 
 #### 1. Reduce Join
 
+Map端的主要工作：
+
+1. 不同表/文件的（k，v）打标签，区别来源
+   1. K：连接字段
+   2. V：其余部分和新加的标志
+2. 输出
+
+Reduce端的主要工作：
+
+1. k的分组已经完成
+2. 在每一个分组当中将来源不同文件的记录分开，再合并
+
 #### 2. Reduce Join案例实操
+
+数据：
+
+​                                 表4-4 订单数据表t_order
+
+| id   | pid  | amount |
+| ---- | ---- | ------ |
+| 1001 | 01   | 1      |
+| 1002 | 02   | 2      |
+| 1003 | 03   | 3      |
+| 1004 | 01   | 4      |
+| 1005 | 02   | 5      |
+| 1006 | 03   | 6      |
+
+​                                 表4-5 商品信息表t_product
+
+| pid  | pname |
+| ---- | ----- |
+| 01   | 小米  |
+| 02   | 华为  |
+| 03   | 格力  |
+
+想要的结果：将商品信息表中数据根据商品pid合并到订单数据表中。
+
+| id   | pname | amount |
+| ---- | ----- | ------ |
+| 1001 | 小米  | 1      |
+| 1004 | 小米  | 4      |
+| 1002 | 华为  | 2      |
+| 1005 | 华为  | 5      |
+| 1003 | 格力  | 3      |
+| 1006 | 格力  | 6      |
+
+需求分析：
+
+![image-20200619145349794](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200619145349.png)
+
+
+
+reducer分组的方式默认是按照排序的方式进行分组（如没自定义排序，那就是key的字典序）。
+
+```java
+package com.atguigu.reducejoin;
+
+import org.apache.hadoop.io.WritableComparable;
+
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/19 15:16
+ */
+public class OrderBean implements WritableComparable<OrderBean> {
+    private String id;
+    private String pname;
+    private String pid;
+    private int amount;
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getPname() {
+        return pname;
+    }
+
+    public void setPname(String pname) {
+        this.pname = pname;
+    }
+
+    public String getPid() {
+        return pid;
+    }
+
+    public void setPid(String pid) {
+        this.pid = pid;
+    }
+
+    public int getAmount() {
+        return amount;
+    }
+
+    public void setAmount(int amount) {
+        this.amount = amount;
+    }
+
+    public OrderBean(String id, String pname, String pid, int amount) {
+        this.id = id;
+        this.pname = pname;
+        this.pid = pid;
+        this.amount = amount;
+    }
+
+    public OrderBean() {
+    }
+
+    @Override
+    public String toString() {
+        return id + "\t" + pname + "\t" + pid + "\t" + amount;
+    }
+
+    /**
+     * 排序：先按照pid排序，pid相同再按照pname排序
+     * @param o 比较对象
+     * @return 比较值
+     */
+    @Override
+    public int compareTo(OrderBean o) {
+        //按照pid排序
+        int compare = this.pid.compareTo(o.pid);
+        if (compare==0){
+            //按照名字，从大到小排序
+            return -this.pname.compareTo(o.pname);
+        }
+        return compare;
+    }
+
+    @Override
+    public void write(DataOutput out) throws IOException {
+        out.writeUTF(id);
+        out.writeUTF(pid);
+        out.writeUTF(pname);
+        out.writeInt(amount);
+    }
+
+    @Override
+    public void readFields(DataInput in) throws IOException {
+         id = in.readUTF();
+         pid = in.readUTF();
+         pname = in.readUTF();
+         amount = in.readInt();
+    }
+}
+
+```
+
+```java
+package com.atguigu.reducejoin;
+
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.io.Text;
+
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.lib.input.FileSplit;
+
+import java.io.IOException;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/19 15:15
+ */
+public class OrderMapper extends Mapper<LongWritable, Text,OrderBean, NullWritable> {
+    private OrderBean bean = new OrderBean();
+    private String fileName;
+
+
+    /**
+     * 获取文件名称
+     * @param context
+     * @throws IOException
+     * @throws InterruptedException
+     */
+    @Override
+    protected void setup(Context context) throws IOException, InterruptedException {
+        //获取切片的文件名
+        FileSplit fs = (FileSplit)context.getInputSplit();
+        fileName = fs.getPath().getName();
+    }
+
+    /**
+     * 封装成对象
+     * @param key 偏移量
+     * @param value 一行一行的数据
+     * @param context 写出去
+     * @throws IOException
+     * @throws InterruptedException
+     */
+    @Override
+    protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+        String line = value.toString();
+        String[] info = line.split("\t");
+
+        //根据文件名决定封装对象时的数据，那怎么拿到文件名呢
+        if("order.txt".equals(fileName)){
+            //order.txt 属性的值不能为null，否则序列化时会抛异常
+            bean.setId(info[0]);
+            bean.setPid(info[1]);
+            bean.setAmount(Integer.parseInt(info[2]));
+            bean.setPname("");
+        }else {
+            bean.setPid(info[0]);
+            bean.setPname(info[1]);
+            bean.setId("");
+            bean.setAmount(0);
+        }
+
+        //将数据写出去,排序的方式在OrderBean中
+        context.write(bean, NullWritable.get());
+
+    }
+}
+
+```
+
+```java
+package com.atguigu.reducejoin;
+
+import org.apache.hadoop.io.WritableComparable;
+import org.apache.hadoop.io.WritableComparator;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/19 15:41
+ * 排序比较器对象， - 给分组用
+ *
+ */
+public class MyGroupComparator extends WritableComparator {
+    public MyGroupComparator(){
+        super(OrderBean.class,true);
+    }
+
+    @Override
+    public int compare(WritableComparable a, WritableComparable b) {
+        OrderBean oa = (OrderBean) a;
+        OrderBean ob = (OrderBean) b;
+        return oa.getPid().compareTo(ob.getPid());
+    }
+}
+
+```
+
+```java
+package com.atguigu.reducejoin;
+
+import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.mapreduce.Reducer;
+
+import java.io.IOException;
+import java.util.Iterator;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/19 15:16
+ */
+public class OrderReducer extends Reducer<OrderBean, NullWritable,OrderBean,NullWritable> {
+    /**
+     *
+     * @param key 一组数据
+     * @param values
+     * @param context 写出
+     * @throws IOException
+     * @throws InterruptedException
+     */
+    @Override
+    protected void reduce(OrderBean key, Iterable<NullWritable> values, Context context) throws IOException, InterruptedException {
+        //获取一组数据  获取iterator迭代器
+        Iterator<NullWritable> iterator = values.iterator();
+        //每next一下，key指向的那个对象中的内容会发生变化
+        iterator.next();
+        //获取该组数据的第一行
+        String pname = key.getPname();
+        while (iterator.hasNext()){
+            //后面的数据添加pname
+            iterator.next();
+            key.setPname(pname);
+            //将数据写出去
+            context.write(key, NullWritable.get());
+        }
+
+    }
+}
+
+```
+
+```java
+package com.atguigu.reducejoin;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+import java.io.IOException;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/19 15:16
+ */
+public class OrderDriver {
+    public static void main(String[] args) throws IOException, ClassNotFoundException, InterruptedException {
+        Job job = Job.getInstance(new Configuration());
+        job.setJarByClass(OrderDriver.class);
+
+        job.setMapperClass(OrderMapper.class);
+        job.setReducerClass(OrderReducer.class);
+
+        job.setMapOutputKeyClass(OrderBean.class);
+        job.setMapOutputValueClass(NullWritable.class);
+
+        job.setOutputKeyClass(OrderBean.class);
+        job.setOutputValueClass(NullWritable.class);
+
+        //设置分组比较器对象  如果是排序则是另一个方法
+        job.setGroupingComparatorClass(MyGroupComparator.class);
+
+        FileInputFormat.setInputPaths(job, new Path("D:\\IdeaProjects\\myhadoop\\src\\hdfstest\\input_phoneorder"));
+        FileOutputFormat.setOutputPath(job, new Path("D:\\IdeaProjects\\myhadoop\\src\\hdfstest\\output_reducejoin"));
+
+        job.waitForCompletion(true);
+    }
+}
+
+```
+
+**思考：在Reduce端处理过多的表，非常容易产生数据倾斜。怎么办？**
+
+在Map端缓存多张表，提前处理业务逻辑，这样增加Map端业务，减少Reduce端数据的压力，尽可能的减少数据倾斜。
 
 #### 3. Map Join
 
+Map Join适用于一张表十分小、一张表很大的场景。
+
+（1）在Mapper的setup阶段，将文件读取到缓存集合中。
+
+（2）在驱动函数中加载缓存。
+
+// 缓存普通文件到Task运行节点。缓存小表
+
+job.addCacheFile(new URI("file://e:/cache/pd.txt"));
+
 #### 4. Map Join案例实操
+
+```java
+package com.atguigu.mapjoin;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+import java.io.IOException;
+import java.net.URI;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/19 15:16
+ */
+public class OrderDriver {
+    public static void main(String[] args) throws IOException, ClassNotFoundException, InterruptedException {
+        Job job = Job.getInstance(new Configuration());
+        job.setJarByClass(OrderDriver.class);
+
+
+        job.setMapperClass(OrderMapper.class);
+        job.setNumReduceTasks(0);
+
+        job.setMapOutputKeyClass(OrderBean.class);
+        job.setMapOutputValueClass(NullWritable.class);
+
+
+        //设置缓存文件 file:///本地
+        job.addCacheFile(URI.create("file:///D:/IdeaProjects/myhadoop/src/hdfstest/input_phoneorder/pd.txt"));
+
+        FileInputFormat.setInputPaths(job, new Path("D:\\IdeaProjects\\myhadoop\\src\\hdfstest\\input_phoneorder\\order.txt"));
+        FileOutputFormat.setOutputPath(job, new Path("D:\\IdeaProjects\\myhadoop\\src\\hdfstest\\output_mapjoin"));
+
+        job.waitForCompletion(true);
+    }
+}
+
+```
+
+```java
+package com.atguigu.mapjoin;
+
+import org.apache.commons.lang.StringUtils;
+import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.lib.input.FileSplit;
+
+import java.io.*;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/19 15:15
+ */
+public class OrderMapper extends Mapper<LongWritable, Text, OrderBean, NullWritable> {
+    private Map<String,String> map = new HashMap<>();
+    //写上面只创建一次，可以循环利用。写在方法中会循环创建多个对象，不合理
+    private OrderBean outKey = new OrderBean();
+
+    @Override
+    protected void setup(Context context) throws IOException, InterruptedException {
+        // 获取文件系统
+        FileSystem fs = FileSystem.get(context.getConfiguration());
+        //获取缓存的路径
+        URI[] uris = context.getCacheFiles();
+        //开流
+        FSDataInputStream fis = fs.open(new Path(uris[0]));
+        //一行一行读取数据
+
+        BufferedReader br = new BufferedReader(new InputStreamReader(fis));
+        String line ="";
+        while (!StringUtils.isEmpty(line = br.readLine())){
+            //读数据-切割
+            String[] split = line.split("\t");
+            //放到map中
+            map.put(split[0],split[1]);
+        }
+        //可以关流了
+        IOUtils.closeStream(br);
+        IOUtils.closeStream(fis);
+        IOUtils.closeStream(fs);
+    }
+
+    @Override
+    protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+        //封装成kv
+//        String line = new String(value.getBytes(), 0, value.getLength(), "GBK");
+//        String[] split = line.split("\t");
+
+        String[] split = value.toString().split("\t");
+        outKey.setId(split[0]);
+        outKey.setPid(split[1]);
+        outKey.setAmount(Integer.parseInt(split[2]));
+        outKey.setPname(map.get(split[1]));
+
+        context.write(outKey, NullWritable.get());
+
+    }
+}
+```
 
 ### 8. 计数器应用
 
+计数器API
+
+1. 枚举方式
+
+   ```java
+   enum MyCounter(PASS, FAIL)
+   fail = context.getCounter(MyCounter.FAIL);
+   
+   fail.increment(1)
+   ```
+
+2. 计数器组、计数器名称
+
+   ```java
+   pass = context.getCounter("ETL", "pass");
+   
+   pass.increment(1);
+   ```
+
+   
+
+**实操：**
+
+```java
+package com.atguigu.etlcount;
+
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Counter;
+import org.apache.hadoop.mapreduce.Mapper;
+
+import java.io.IOException;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/19 11:47
+ * 一、数据清洗
+ * 二、数据统计（清洗掉的数据的数量，合格的数据的数量）
+ */
+public class ETLMapper extends Mapper<LongWritable , Text, Text, NullWritable> {
+    Counter pass;
+    Counter fail;
+    /**
+     * 获取计数器对象  和这个方法无关
+     * 该方法只被调用一次
+     * 思考：为什么不用构造器？
+     * - 无参构造器
+     * - 有参构造器 不会被调用，默认调用无参的
+     * Called once at the beginning of the task.
+     * @param context
+     * @throws IOException
+     * @throws InterruptedException
+     */
+    @Override
+    protected void setup(Context context) throws IOException, InterruptedException {
+        //获取计数器
+        //string groupname：组名
+        //counterName : 计数器的名字
+         pass = context.getCounter("ETL", "pass");
+         fail = context.getCounter("ETL", "fail");
+    }
+
+    /**
+     * 数据清洗 --> 合格标准：用空格分割后的数组长度大于11的
+     * @param key
+     * @param value
+     * @param context
+     * @throws IOException
+     * @throws InterruptedException
+     */
+    @Override
+    protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+        //转成字符数组
+        String[] line = value.toString().split(" ");
+        if (line.length>11){
+            //写出去  value是null
+            context.write(value, NullWritable.get());
+            pass.increment(1);
+        }else {
+            fail.increment(1);
+        }
+    }
+}
+
+```
+
+如果清洗掉的数据过多，要和同事沟通是否采集环节出现问题
+
 ### 9. 数据清洗（ETL）
 
+（以后清洗不用mapper，用别的界面式的）
+
+1. 什么是数据清洗
+
+清理掉不符合用户要求的数据。
+
+2. 熟悉MR
+
+清理的过程往往只需要运行Mapper程序，不需要运行Reduce程序。
+
+
+
+```java
+package com.atguigu.etl;
+
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Mapper;
+
+import java.io.IOException;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/19 11:47
+ * 一、数据清洗
+ * 二、数据统计（清洗掉的数据的数量，合格的数据的数量）
+ */
+public class ETLMapper extends Mapper<LongWritable , Text, Text, NullWritable> {
+    /**
+     * 数据清洗 --> 合格标准：用空格分割后的数组长度大于11的
+     * @param key
+     * @param value
+     * @param context
+     * @throws IOException
+     * @throws InterruptedException
+     */
+    @Override
+    protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+        //转成字符数组
+        String[] line = value.toString().split(" ");
+        if (line.length>11){
+            //写出去  value是null
+            context.write(value, NullWritable.get());
+        }
+    }
+}
+
+```
+
+```java
+package com.atguigu.etl;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+import java.io.IOException;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/19 11:53
+ */
+public class ETLDriver {
+    public static void main(String[] args) throws IOException, ClassNotFoundException, InterruptedException {
+        Job job = Job.getInstance(new Configuration());
+
+        job.setJarByClass(ETLDriver.class);
+
+        job.setMapperClass(ETLMapper.class);
+
+        job.setNumReduceTasks(0);
+
+        job.setMapOutputKeyClass(Text.class);
+        job.setMapOutputValueClass(NullWritable.class);
+
+
+        FileInputFormat.setInputPaths(job, new Path("D:\\IdeaProjects\\myhadoop\\src\\hdfstest\\input_etl"));
+        FileOutputFormat.setOutputPath(job, new Path("D:\\IdeaProjects\\myhadoop\\src\\hdfstest\\output_etl"));
+
+        job.waitForCompletion(true);
+    }
+}
+
+```
+
 ### 10. MapReduce开发总结
+
+#### 1. 输入数据接口 InputFormat
+
+#### 2.逻辑处理接口 Mapper
+
+#### 3. 分区 Partitioner
+
+#### 4. 排序 Comparable
+
+#### 5. 合并 Combiner
+
+#### 6. 逻辑处理接口 Reducer
+
+#### 7. 输出数据接口 OutputFormat
 
 # 四、Yarn
 
