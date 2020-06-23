@@ -4875,11 +4875,11 @@ public class Combiner extends Reducer<Text, IntWritable, Text,IntWritable> {
 
 （1）Copy阶段：ReduceTask从各个MapTask上远程拷贝一片数据，并针对某一片数据，如果其大小超过一定阈值，则写到磁盘上，否则直接放到内存中。
 
-​    （2）Merge阶段：在远程拷贝数据的同时，ReduceTask启动了两个后台线程对内存和磁盘上的文件进行合并，以防止内存使用过多或磁盘上文件过多。
+（2）Merge阶段：在远程拷贝数据的同时，ReduceTask启动了两个后台线程对内存和磁盘上的文件进行合并，以防止内存使用过多或磁盘上文件过多。
 
-​    （3）Sort阶段：按照MapReduce语义，用户编写reduce()函数输入数据是按key进行聚集的一组数据。为了将key相同的数据聚在一起，Hadoop采用了基于排序的策略。由于各个MapTask已经实现对自己的处理结果进行了局部排序，因此，ReduceTask只需对所有数据进行一次归并排序即可。
+（3）Sort阶段：按照MapReduce语义，用户编写reduce()函数输入数据是按key进行聚集的一组数据。为了将key相同的数据聚在一起，Hadoop采用了基于排序的策略。由于各个MapTask已经实现对自己的处理结果进行了局部排序，因此，ReduceTask只需对所有数据进行一次归并排序即可。
 
-​    （4）Reduce阶段：reduce()函数将计算结果写到HDFS上。
+（4）Reduce阶段：reduce()函数将计算结果写到HDFS上。
 
 **设置ReduceTask并行度（个数）**
 
@@ -5467,10 +5467,8 @@ public class OrderReducer extends Reducer<OrderBean, NullWritable,OrderBean,Null
             //将数据写出去
             context.write(key, NullWritable.get());
         }
-
     }
 }
-
 ```
 
 ```java
@@ -5847,21 +5845,334 @@ public class ETLDriver {
 
 # 四、Yarn
 
+> windows 帮助我们做了什么？
+>
+> 1. 资源管理
+> 2. 翻译：软件与硬件打交道
+
+Yarn是资源调度平台，负责为运算程序提供服务器运算资源。相当于一个分布式的操作系统平台。
+
 ## 1. Yarn基本架构
+
+YARN主要由
+
+- ResourceManager
+- NodeManager：每个节点都有
+- ApplicationMaster
+- Container
+
+![image-20200620092532377](C:\Users\Lenovo\Desktop\20200620092532.png)
 
 ## 2. Yarn工作机制
 
+![image-20200620093949624](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200620093949.png)
+
+​    （1）MR程序提交到客户端所在的节点。
+
+​    （2）YarnRunner向ResourceManager申请一个Application。
+
+​    （3）RM将该应用程序的资源路径返回给YarnRunner。
+
+​    （4）该程序将运行所需资源提交到HDFS上。
+
+​    （5）程序资源提交完毕后，申请运行mrAppMaster。
+
+​    （6）RM将用户的请求初始化成一个Task。
+
+​    （7）其中一个NodeManager领取到Task任务。
+
+​    （8）该NodeManager创建容器Container，并产生MRAppmaster。
+
+​    （9）Container从HDFS上拷贝资源到本地。
+
+​    （10）MRAppmaster向RM 申请运行MapTask资源。
+
+​    （11）RM将运行MapTask任务分配给另外两个NodeManager，另两个NodeManager分别领取任务并创建容器。
+
+​    （12）MR向两个接收到任务的NodeManager发送程序启动脚本，这两个NodeManager分别启动MapTask，MapTask对数据分区排序。
+
+​    （13）MrAppMaster等待所有MapTask运行完毕后，向RM申请容器，运行ReduceTask。
+
+​    （14）ReduceTask向MapTask获取相应分区的数据。
+
+​    （15）程序运行完毕后，MR会向RM申请注销自己。
+
 ## 3. 作业提交全过程
 
+作业提交全过程详解
+
+（1）作业提交
+
+第1步：Client调用job.waitForCompletion方法，向整个集群提交MapReduce作业。
+
+第2步：Client向RM申请一个作业id。
+
+第3步：RM给Client返回该job资源的提交路径和作业id。
+
+第4步：Client提交jar包、切片信息和配置文件到指定的资源提交路径。
+
+第5步：Client提交完资源后，向RM申请运行MrAppMaster。
+
+（2）作业初始化
+
+第6步：当RM收到Client的请求后，将该job添加到容量调度器中。
+
+第7步：某一个空闲的NM领取到该Job。
+
+第8步：该NM创建Container，并产生MRAppmaster。
+
+第9步：下载Client提交的资源到本地。
+
+（3）任务分配
+
+第10步：MrAppMaster向RM申请运行多个MapTask任务资源。
+
+第11步：RM将运行MapTask任务分配给另外两个NodeManager，另两个NodeManager分别领取任务并创建容器。
+
+（4）任务运行
+
+第12步：MR向两个接收到任务的NodeManager发送程序启动脚本，这两个NodeManager分别启动MapTask，MapTask对数据分区排序。
+
+第13步：MrAppMaster等待所有MapTask运行完毕后，向RM申请容器，运行ReduceTask。
+
+第14步：ReduceTask向MapTask获取相应分区的数据。
+
+第15步：程序运行完毕后，MR会向RM申请注销自己。
+
+（5）进度和状态更新
+
+YARN中的任务将其进度和状态(包括counter)返回给应用管理器, 客户端每秒(通过mapreduce.client.progressmonitor.pollinterval设置)向应用管理器请求进度更新, 展示给用户。
+
+（6）作业完成
+
+除了向应用管理器请求作业进度外, 客户端每5秒都会通过调用waitForCompletion()来检查作业是否完成。时间间隔可以通过mapreduce.client.completion.pollinterval来设置。作业完成之后, 应用管理器和Container会清理工作状态。作业的信息会被作业历史服务器存储以备之后用户核查。
+
 ## 4. 资源调度器
+
+yarn-default.xml
+
+```xml
+  <property>
+    <description>The class to use as the resource scheduler.</description>
+    <name>yarn.resourcemanager.scheduler.class</name>
+    <value>org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler</value>
+  </property>
+```
+
+hadoop103 web页面
+
+![img](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200620100349.png)
+
+### 1. FIFO 先进先出调度器
+
+先到先服务。
+
+缺点：
+
+1. 有加急任务无法处理
+2. 会造成资源闲置，有空余资源但无法处理更多任务
+
+### 2. Capacity Scheduler 容量调度器（3.1.3默认）
+
+支持多队列，每个队列可配置一定的资源，每个队列采用FIFO。
+
+![image-20200620100908577](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200620100908.png)
+
+
+
+为了防止同一个用户的作业独占队列中的资源，该调度器会对同一用户提交的作业所占资源量进行限定。
+
+如果不指定提交队列：
+
+- 首先，计算每个队列中正在运行的任务数与其应该分得的计算资源之间的比值，选择一个该比值最小的队列——最闲的。
+
+- 其次，按照作业优先级和提交时间顺序，同时考虑用户资源量限制和内存限制对队列内任务排序。（一般不会考虑）
+
+**三个队列同时按照任务的先后顺序依次执行**，比如，job11、job21和job31分别排在队列最前面，**先运行，也是并行运行**。
+
+队列之间可以互借资源，如A资源已用完，而B空闲，可向B借用资源。但会出现当B需要资源时，无资源可用的情况。那可以设置一个底线（棺材本），设置保本资源，比如10%。那B最多可向外借40%的资源。
+
+Scheduler中：
+
+- 所有的队列都是在queue:root下
+
+- 其下的队列数即为集群当前队列数
+
+- Num Container ： 容器数量
+
+### 3. Fair Scheduler 公平调度器
+
+同队列所有任务共享资源，**在时间尺度上**获得公平的资源。
+
+![image-20200620103146768](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200620103146.png)
+
+大致可以这么理解 ：
+
+- 资源够的情况下 如需 4 2 4 5 则按占比 job11 4/(4+2+4+5)
+
+- 有新任务job15进来时，它得不到所需占比的资源。已经霸占的资源无法抽离。只能等着他们释放资源，补给job15，直到job15任务执行完毕或达到其占比（没有缺额）。因此称为时间尺度上的公平。
+
+  
+
+![image-20200620102937858](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200620102937.png)
+
+- 支持多队列多作业，每个队列可以单独配置
+- 同一队列的作业按照其优先级分享整个队列的资源，**并发执行**
+- **每个作业可以设置最小资源值**，调度器会保证作业获得其以上的资源
 
 ## 5. 容量调度器多队列提交案例
 
 ### 1. 需求
 
+创建一个任务，提交到新增的hive队列
+
 ### 2. 配置多队列的容量调度器
 
+集群中的配置文件
+
+```xml
+ <property>
+    <name>yarn.scheduler.capacity.root.queues</name>
+    <value>default,hive</value>
+    <description>
+      The queues at the this level (root is the root queue).
+    </description>
+  </property>
+
+  <property>
+    <name>yarn.scheduler.capacity.root.default.capacity</name>
+    <value>40</value>
+    <description>Default queue target capacity.</description>
+  </property>
+
+ 
+ 
+  <property>
+    <name>yarn.scheduler.capacity.root.hive.capacity</name>
+    <value>60</value>
+  </property>
+
+
+	<property>
+		<name>yarn.scheduler.capacity.root.hive.user-limit-factor</name>
+		<value>1</value>
+	</property>
+
+	<property>
+		<name>yarn.scheduler.capacity.root.hive.maximum-capacity</name>
+		<value>80</value>
+	</property>
+
+	<property>
+		<name>yarn.scheduler.capacity.root.hive.state</name>
+		<value>RUNNING</value>
+	</property>
+
+	<property>
+		<name>yarn.scheduler.capacity.root.hive.acl_submit_applications</name>
+		<value>*</value>
+	</property>
+
+	<property>
+		<name>yarn.scheduler.capacity.root.hive.acl_administer_queue</name>
+		<value>*</value>
+	</property>
+
+	<property>
+		<name>yarn.scheduler.capacity.root.hive.acl_application_max_priority</name>
+		<value>*</value>
+	</property>
+
+	<property>
+		<name>yarn.scheduler.capacity.root.hive.maximum-application-lifetime</name>
+		<value>-1</value>
+	</property>
+
+	<property>
+		<name>yarn.scheduler.capacity.root.hive.default-application-lifetime</name>
+		<value>-1</value>
+	</property>
+	
+
+```
+
+在配置完成后，重启Yarn，就可以看到两条队列
+
+![image-20200620110121799](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200620110121.png)
+
 ### 3. 向Hive队列提交任务
+
+发布任务
+
+```java
+package com.atguigu.wordcount;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import java.io.IOException;
+
+/**
+ * 在本地提交任务到集群上
+ * 1.配置一些内容
+ * 2.打包：
+ *      打包前 ：job.setJarByClass(CountDriver3.class);
+ *      打包后 ：job.setJar("D:\\code\\hadoop\\target\\hadoop-1.0-SNAPSHOT.jar");
+ * 3.配置（给args传值）
+ *     VMOPTIONS :  -DHADOOP_USER_NAME=atguigu  (使用哪个用户操作集群)
+ *     PROGRAM ARGUMENTS ：hdfs://hadoop102:9820/input hdfs://hadoop102:9820/output （输入和输出路径）
+ */
+public class CountDriverLocalToHadoop {
+    public static void main(String[] args) throws InterruptedException, IOException, ClassNotFoundException {
+        //用来设置配置内容的对象
+        Configuration conf = new Configuration();
+        //指定HDFS中NameNode的地址
+        conf.set("fs.defaultFS", "hdfs://hadoop102:9820");
+        //指定MR运行在Yarn上
+        conf.set("mapreduce.framework.name","yarn");
+        //指定MR可以在远程集群上运行
+        conf.set("mapreduce.app-submission.cross-platform","true");
+        //指定resourcemanager的位置
+        conf.set("yarn.resourcemanager.hostname","hadoop103");
+
+        conf.set("mapred.job.queue.name","hive");
+
+
+        //        1.获取job对象
+        Job job = Job.getInstance(conf);
+//        2.关联jar ---打包前需要配置的
+        //job.setJarByClass(CountDriverLocalToHadoop.class);
+        //指定jar包的路径---打包后需要配置的
+        job.setJar("D:\\IdeaProjects\\atguiguHadoop\\myhadoop\\target\\myhadoop-1.0-SNAPSHOT.jar");
+//        3.关联mapper和reducer
+        job.setMapperClass(CountMapper.class);
+        job.setReducerClass(CountReducer.class);
+//        4.设置mapper的输出的key和value类型
+        job.setMapOutputKeyClass(Text.class);
+        job.setMapOutputValueClass(IntWritable.class);
+//        5.设置最终(reducer)输出的key和value的类型
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+//        6.设置输入输出路径
+        FileInputFormat.setInputPaths(job,new Path(args[0]));
+        //注意 ：输出目录必须不存在
+        FileOutputFormat.setOutputPath(job,new Path(args[1]));
+//        7.提交job任务
+        //boolean verbose是否打印进度
+        boolean isSuccess = job.waitForCompletion(true);
+        //虚拟机退出的状态 ：0是正常退出，1非正常退出
+//        System.exit(isSuccess ? 0 : 1);
+
+    }
+}
+
+```
+
+![image-20200620105803747](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200620105803.png)
 
 ## 6. MapReduce&Yarn常见错误及解决方案
 
@@ -5875,4 +6186,625 @@ Failed to execute goal org.codehaus.mojo:exec-maven-plugin:3.0.0:exec (default-c
 
 2. 找不到hadoop包
 
-   
+保持版本一致
+
+# 五、优化
+
+## 1. Hadoop数据压缩
+
+### 1. 概述
+
+when：数据规模很大和工作负载密集
+
+what：数据压缩对提高Hadoop运行效率的一种**优化策略**
+
+how good：对于节省资源、最小化磁盘I/O和网络传输非常有帮助。
+
+how：可以在任意MapReduce阶段启用压缩。通过对Mapper、Reducer运行过程的数据进行压缩，以减少磁盘IO，提高MR程序运行速度。
+
+基本原则：
+
+（1）运算密集型的job，少用压缩
+
+（2）IO密集型的job，多用压缩
+
+### 2. MR支持的压缩编码
+
+```shell
+#查看hadoop目前支持的的压缩编码
+[atguigu@hadoop102 hadoop]$ hadoop checknative
+2020-06-20 11:43:23,244 INFO bzip2.Bzip2Factory: Successfully loaded & initialized native-bzip2 library system-native
+2020-06-20 11:43:23,246 INFO zlib.ZlibFactory: Successfully loaded & initialized native-zlib library
+2020-06-20 11:43:23,254 WARN erasurecode.ErasureCodeNative: ISA-L support is not available in your platform... using builtin-java codec where applicable
+Native library checking:
+hadoop:  true /opt/module/hadoop-3.1.3/lib/native/libhadoop.so.1.0.0
+zlib:    true /lib64/libz.so.1
+zstd  :  true /lib64/libzstd.so.1
+snappy:  true /lib64/libsnappy.so.1
+lz4:     true revision:10301
+bzip2:   true /lib64/libbz2.so.1
+openssl: true /lib64/libcrypto.so
+ISA-L:   false libhadoop was built without ISA-L support
+
+```
+
+是否可切分：对应的压缩算法是否可以搜索数据流的任意位置并进一步往下读取数据。
+
+以下举个例子来进行说明：
+
+- 以一个存储在HDFS文件系统中且不进行压缩的大小为 1 GB 的文件为例。如果HDFS的块大小设置为128，那么该文件将被存储在8个块中，把这个文件作为输入数据的MapReduc/Spark作业，将创建8个map/task任务，其中**每个数据块对应一个任务作为输入数据。**
+- 现在，**假如经过gzip压缩后**，文件大小为1GB。与之前一样，HDFS也是将这个文件存储成8个数据块。但是**每个单独的map/task任务将无法独立于其他任务进行数据处理**，官方一点的说法，原因就是**因为数据存储在HDFS时是被切成块的，且该压缩算法无法从任意进行读取。**
+- 通俗的讲解，就是因为存储在HDFS的每个块都不是完整的文件，我们可以把一个完整的文件认为是具有首尾标识的，因为被切分了，所以每个数据块有些有头标示，有些有尾标示，有些头尾标示都没有，所以就不能多任务来并行对这个文件进行处理。 **对于这种不可切分的，只有将该文件的所有HDFS的数据块都传输到一个map/task任务来进行处理，但是大多数数据块都没有存储在这个任务的节点上，所以需要跨节点传输，且不能并行处理，因此运行的时间可能很长。**
+
+| 压缩格式    | hadoop自带？ | 算法    | 文件扩展名 | 是否可切分 | 换成压缩格式后，原来的程序是否需要修改 |
+| ----------- | ------------ | ------- | ---------- | ---------- | -------------------------------------- |
+| **DEFLATE** | 是，直接使用 | DEFLATE | .deflate   | **否**     | 和文本处理一样，不需要修改             |
+| **Gzip**    | 是，直接使用 | DEFLATE | .gz        | **否**     | 和文本处理一样，不需要修改             |
+| **bzip2**   | 是，直接使用 | bzip2   | .bz2       | **是**     | 和文本处理一样，不需要修改             |
+| **LZO**     | 否，需要安装 | LZO     | .lzo       | **是**     | 需要建索引，还需要指定输入格式         |
+| **Snappy**  | 否，需要安装 | Snappy  | .snappy    | **否**     | 和文本处理一样，不需要修改             |
+
+为了支持多种压缩/解压缩算法，Hadoop引入了编码/解码器，如下表所示。
+
+| 压缩格式   | 对应的编码/解码器                             |
+| ---------- | --------------------------------------------- |
+| DEFLATE    | org.apache.hadoop.io.compress.DefaultCodec    |
+| gzip       | org.apache.hadoop.io.compress.GzipCodec       |
+| bzip2      | org.apache.hadoop.io.compress.BZip2Codec      |
+| LZO        | com.hadoop.compression.lzo.LzopCodec          |
+| **Snappy** | **org.apache.hadoop.io.compress.SnappyCodec** |
+
+### 3. 压缩方式选择
+
+压缩性能的比较（MR压缩考虑的就是速度）
+
+| 压缩算法 | 原始文件大小 | 压缩文件大小 | 压缩速度 | 解压速度 |
+| -------- | ------------ | ------------ | -------- | -------- |
+| gzip     | 8.3GB        | 1.8GB        | 17.5MB/s | 58MB/s   |
+| bzip2    | 8.3GB        | 1.1GB        | 2.4MB/s  | 9.5MB/s  |
+| LZO      | 8.3GB        | 2.9GB        | 49.3MB/s | 74.6MB/s |
+| snappy   | 8.3GB        | >2.9GB       | 250MB/s  | 500MB/s  |
+
+http://google.github.io/snappy/
+
+On a single core of a Core i7 processor in 64-bit mode, Snappy compresses at about **250 MB/sec** or more and decompresses at about **500 MB/sec** or more.
+
+### 4. 压缩位置选择
+
+可以在MapReduce作用的任意阶段启用
+
+### 5. 压缩参数配置
+
+要在Hadoop中启用压缩，可以配置如下参数：
+
+| 参数                                                         | 默认值                                                       | 阶段        | 建议                                          |
+| ------------------------------------------------------------ | ------------------------------------------------------------ | ----------- | --------------------------------------------- |
+| io.compression.codecs    （在core-site.xml中配置）           | org.apache.hadoop.io.compress.DefaultCodec,  org.apache.hadoop.io.compress.GzipCodec,  org.apache.hadoop.io.compress.BZip2Codec | 输入压缩    | Hadoop使用文件扩展名判断是否支持某种编解码器  |
+| mapreduce.map.output.compress（在mapred-site.xml中配置）     | false                                                        | mapper输出  | 这个参数设为true启用压缩                      |
+| mapreduce.map.output.compress.codec（在mapred-site.xml中配置） | org.apache.hadoop.io.compress.DefaultCodec                   | mapper输出  | 企业多使用LZO或Snappy编解码器在此阶段压缩数据 |
+| mapreduce.output.fileoutputformat.compress（在mapred-site.xml中配置） | false                                                        | reducer输出 | 这个参数设为true启用压缩                      |
+| mapreduce.output.fileoutputformat.compress.codec（在mapred-site.xml中配置） | org.apache.hadoop.io.compress.DefaultCodec                   | reducer输出 | 使用标准工具或者编解码器，如gzip和bzip2       |
+| mapreduce.output.fileoutputformat.compress.type（在mapred-site.xml中配置） | RECORD                                                       | reducer输出 | SequenceFile输出使用的压缩类型：NONE和BLOCK   |
+
+### 6. 压缩实操案例
+
+#### 1. 数据流的压缩和解压缩
+
+CompressionCodec有两个方法可以用于轻松地压缩或解压缩数据。
+1. 压缩：使用createOutputStream(OutputStreamout)
+2. 解压缩：调用createInputStream(InputStreamin)
+
+```java
+package com.atguigu.bzip2;
+
+import org.apache.commons.math3.analysis.function.Cos;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.io.compress.*;
+import org.apache.hadoop.util.ReflectionUtils;
+import org.junit.Test;
+import sun.font.TrueTypeFont;
+
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+
+/**
+ * @author Mrs.An Xueying
+ * 2020/6/20 14:31
+ *
+ * 用代码的方式去实现压缩和解压缩
+ *
+ * 压缩：输出流需要使用处理流（压缩流）
+ * 解压缩：输入流需要使用处理流（解压缩流）
+ */
+public class CompressTest {
+
+    /**
+     * 指定类型，压缩
+     */
+    @Test
+    public void compressTest() throws IOException {
+        //输入流
+        FileInputStream fis = new FileInputStream(
+                "D:\\IdeaProjects\\atguiguHadoop\\myhadoop\\src\\hdfstest\\input_compress\\dd.txt"
+        );
+        //输出流
+            //使用处理流（压缩流） 多态 接口-实现类创建对象
+         CompressionCodec codec = ReflectionUtils.newInstance(BZip2Codec.class,new Configuration());
+         //处理流
+        CompressionOutputStream cos = codec.createOutputStream(
+                new FileOutputStream("D:\\IdeaProjects\\atguiguHadoop\\myhadoop\\src\\hdfstest\\input_compress\\dd"
+                        + codec.getDefaultExtension())
+        );
+        //流的对拷（一边读一边写）
+        /**
+         * Copies from one stream to another.
+         *
+         * @param in InputStrem to read from
+         * @param out OutputStream to write to
+         * @param buffSize the size of the buffer
+         * @param close whether or not close the InputStream and
+         * OutputStream at the end. The streams are closed in the finally clause.
+         */
+        IOUtils.copyBytes(fis,cos, 1024*1024*5,true);
+        //关流
+        IOUtils.closeStream(cos);
+        IOUtils.closeStream(fis);
+
+    }
+
+    /**
+     * 指定类型，解压缩
+     */
+    @Test
+    public void decompressTest() throws IOException {
+        CompressionCodec codec = ReflectionUtils.newInstance(BZip2Codec.class,new Configuration());
+//输入流
+        FileInputStream fis = new FileInputStream(
+                "D:\\IdeaProjects\\atguiguHadoop\\myhadoop\\src\\hdfstest\\input_compress\\dd.bz2"
+        );
+        CompressionInputStream cis = codec.createInputStream(fis);
+        //输出流
+        FileOutputStream fos = new FileOutputStream("D:\\IdeaProjects\\atguiguHadoop\\myhadoop\\src\\hdfstest\\input_compress\\dd1.txt");
+
+        IOUtils.copyBytes(cis, fos, 1024*1024*5, true);
+        IOUtils.closeStream(fos);
+        IOUtils.closeStream(cis);
+
+    }
+
+    /**
+     * 工厂模式：不用指明解压缩类型，自动找到对应的方法压缩、解压缩
+     * @throws IOException
+     */
+    @Test
+    public void decompressTest2 () throws IOException {
+        CompressionCodecFactory factory = new CompressionCodecFactory(new Configuration());
+        CompressionCodec codec = factory.getCodec(new Path("D:\\IdeaProjects\\atguiguHadoop\\myhadoop\\src\\hdfstest\\input_compress\\dd.bz2"));
+
+        if (codec == null){
+            //不能解压
+            System.out.println("该类型不能解压！");
+            return;
+        }
+        FileInputStream fis = new FileInputStream(
+                "D:\\IdeaProjects\\atguiguHadoop\\myhadoop\\src\\hdfstest\\input_compress\\dd.bz2"
+        );
+        CompressionInputStream cis = codec.createInputStream(fis);
+        //输出流
+        FileOutputStream fos = new FileOutputStream("D:\\IdeaProjects\\atguiguHadoop\\myhadoop\\src\\hdfstest\\input_compress\\dd2.txt");
+
+        IOUtils.copyBytes(cis, fos, 1024*1024*5, true);
+        IOUtils.closeStream(fos);
+        IOUtils.closeStream(cis);
+
+    }
+}
+
+```
+
+#### 2. map/reduce输出端端压缩
+
+```java
+package com.atguigu.compress;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+import java.io.IOException;
+
+/**
+ * 集群都可以 本地只用gzip试验
+ * 参数	默认值
+ * io.compression.codecs
+ * （在core-site.xml中配置）	org.apache.hadoop.io.compress.DefaultCodec, org.apache.hadoop.io.compress.GzipCodec, org.apache.hadoop.io.compress.BZip2Codec
+ *
+ * mapreduce.map.output.compress（在mapred-site.xml中配置）	false
+ * mapreduce.map.output.compress.codec（在mapred-site.xml中配置）	org.apache.hadoop.io.compress.DefaultCodec
+ * mapreduce.output.fileoutputformat.compress（在mapred-site.xml中配置）	false
+ * mapreduce.output.fileoutputformat.compress.codec（在mapred-site.xml中配置）	org.apache.hadoop.io.compress.DefaultCodec
+ * mapreduce.output.fileoutputformat.compress.type（在mapred-site.xml中配置）	RECORD
+ */
+public class CountDriver {
+
+    public static void main(String[] args) throws IOException, ClassNotFoundException, InterruptedException {
+        Configuration conf = new Configuration();
+        //启用压缩 map输出时（溢写时）
+        conf.set("mapreduce.map.output.compress", "true");
+        conf.set("mapreduce.map.output.compress.codec","org.apache.hadoop.io.compress.DefaultCodec");
+
+        //配置reduce输出时文件的压缩
+        conf.set("mapreduce.output.fileoutputformat.compress", "true");
+        conf.set("mapreduce.output.fileoutputformat.compress.codec",
+                "org.apache.hadoop.io.compress.DefaultCodec");
+
+        Job job = Job.getInstance(conf);
+//        2.关联jar
+        job.setJarByClass(CountDriver.class);
+//        3.关联mapper和reducer
+        job.setMapperClass(CountMapper.class);
+        job.setReducerClass(CountReducer.class);
+//        4.设置mapper的输出的key和value类型
+        job.setMapOutputKeyClass(Text.class);
+        job.setMapOutputValueClass(IntWritable.class);
+//        5.设置最终(reducer)输出的key和value的类型
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+//        6.设置输入输出路径
+        FileInputFormat.setInputPaths(job,new Path("D:\\IdeaProjects\\atguiguHadoop\\myhadoop\\src\\hdfstest\\input_combine"));
+        //注意 ：输出目录必须不存在
+        FileOutputFormat.setOutputPath(job,new Path("D:\\IdeaProjects\\atguiguHadoop\\myhadoop\\src\\hdfstest\\output_compress"));
+//        7.提交job任务
+        //boolean verbose是否打印进度
+        boolean isSuccess = job.waitForCompletion(true);
+        //虚拟机退出的状态 ：0是正常退出，1非正常退出
+//        System.exit(isSuccess ? 0 : 1);
+    }
+}
+
+```
+
+## 2. Hadoop企业优化
+
+### 1. MapReduce跑的慢的原因
+
+瓶颈在于两点：
+
+1. 计算机性能：给钱能解决的问题
+   1. CPU
+   2. 内存
+   3. 磁盘健康
+   4. 网络
+2. I/O操作优化：不一定能完全解决，只能看情况调试，尽量优化
+   1. 数据倾斜：无法完全避免
+   2. Map和Reduce数设置不合理：根据具体数据量来衡量
+   3. Map运行时间太长，导致Reduce等待过久
+      1. 环形缓冲区：调大
+   4. 小文件过多
+      1. 添加combine
+   5. 大量的不可分块的超大文件
+      1. 搞个队列单独跑它
+      2. 考虑硬件提升？
+   6. spill次数过多
+   7. Merge次数过多
+
+### 2. MapReduce优化方法
+
+#### 1. 数据输入
+
+合并小文件。采用CombineTestInputFormat来作为输入，解决输入端大量小文件场景。减少Map任务装载次数。
+
+#### 2. Map阶段
+
+1. 减少溢写（spill）次数
+
+   mapreduce.io.sort.mb及mapreduce.map.sort.spill.percent参数值，增大触发Spill的内存上限，减少Spill次数，从而减少磁盘IO
+
+2. 减少合并（merge）次数
+
+   mapreduce.io.sort.factor，增大merge的文件数目，减少merge次数，从而减少MR处理时间
+
+3. 在Map之后，如不影响业务逻辑，先进行Combine处理，减少IO
+
+#### 3. Reduce阶段
+
+1. 合理设置Map和Reduce数
+
+   - 太少：Task等待，延长处理时间
+   - 太多：导致Map、Reduce任务间竞争资源，造成处理超时等错误
+
+2. 设置Map、Reduce共存
+
+   在业务逻辑支持的前提下，调整slowstart.completedmaps参数，使Map运行到一定程度后，Reduce也开始运行，减少Reduce的等待时间
+
+3. 规避使用Reduce
+
+   在连接数据集的时候会产生大量的网络消耗，能不用就不用。
+
+4. 合理设置Reduce端的Buffer
+
+   在资源足够的前提下，可调大阈值，提高效率。mapreduce.reduce.input.buffer.percent，默认为0。
+
+   当值大于0的时候，会**保留指定比例的内存读Buffer中的数据直接拿给Reduce使用**。
+
+#### 4. I/O传输
+
+1. 采用数据压缩的方式
+
+   减少网络IO的时间。安装Snappy和LZO压缩编码器。
+
+2. 使用SequenceFile二进制文件
+
+#### 5. 数据倾斜问题
+
+1. 现象
+   1. 频率倾斜：某一区域的数据量 远大于 其他区域
+   2. 大小倾斜：部分记录的大小 远大于 平均值
+2. 减少数据倾斜的方法（不是解决哦，在业务逻辑允许的前提下）
+   - 方法1：抽样和范围分区
+     1. 对原始数据抽样
+     2. 根据结果集来预设分区边界值（尽量平均）
+   - 方法2：自定义分区
+     - 基于输出键的业务逻辑进行自定义分区，进行平衡（比如：a多，bcd很少，a放一个reduce，bcd放一个reduce）
+     - 如没有业务逻辑要求，可以用mod方式，两个reduce一边一个
+   - 方法3：Combine
+     - 在进入之前就合并一下
+   - 方法4：采用Map Join，尽量避免Reduce Join
+
+#### 6. 常用的调优参数
+
+##### 1. 资源相关参数 
+
+mapred-default.xml 以下参数是在用户自己的MR应用程序中配置就可以生效 
+
+| 配置参数                                      | 参数说明                                                     |
+| --------------------------------------------- | ------------------------------------------------------------ |
+| mapreduce.map.memory.mb                       | 一个MapTask可使用的资源上限（单位:MB），默认为1024。如果MapTask实际使用的资源量超过该值，则会被强制杀死。 |
+| mapreduce.reduce.memory.mb                    | 一个ReduceTask可使用的资源上限（单位:MB），默认为1024。如果ReduceTask实际使用的资源量超过该值，则会被强制杀死。 |
+| mapreduce.map.cpu.vcores                      | 每个MapTask可使用的最多cpu core数目，默认值: 1               |
+| mapreduce.reduce.cpu.vcores                   | 每个ReduceTask可使用的最多cpu  core数目，默认值: 1           |
+| mapreduce.reduce.shuffle.parallelcopies       | 每个Reduce去Map中取数据的并行数。默认值是5                   |
+| mapreduce.reduce.shuffle.merge.percent        | Buffer中的数据达到多少比例开始写入磁盘。默认值0.66           |
+| mapreduce.reduce.shuffle.input.buffer.percent | Buffer大小占Reduce可用内存的比例。默认值0.7                  |
+| mapreduce.reduce.input.buffer.percent         | 指定多少比例的内存用来存放Buffer中的数据，默认值是0.0        |
+
+yarn-default.xml  应该在YARN启动之前就配置在服务器的配置文件中才能生效
+
+| 配置参数                                 | 参数说明                                        |
+| ---------------------------------------- | ----------------------------------------------- |
+| yarn.scheduler.minimum-allocation-mb     | 给应用程序Container分配的最小内存，默认值：1024 |
+| yarn.scheduler.maximum-allocation-mb     | 给应用程序Container分配的最大内存，默认值：8192 |
+| yarn.scheduler.minimum-allocation-vcores | 每个Container申请的最小CPU核数，默认值：1       |
+| yarn.scheduler.maximum-allocation-vcores | 每个Container申请的最大CPU核数，默认值：32      |
+| yarn.nodemanager.resource.memory-mb      | 给Containers分配的最大物理内存，默认值：8192    |
+
+mapred-default.xml      Shuffle性能优化的关键参数，应在YARN启动之前就配置好
+
+| 配置参数                         | 参数说明                          |
+| -------------------------------- | --------------------------------- |
+| mapreduce.task.io.sort.mb        | Shuffle的环形缓冲区大小，默认100m |
+| mapreduce.map.sort.spill.percent | 环形缓冲区溢出的阈值，默认80%     |
+
+##### 2. 容错相关参数（MapReduce性能优化）
+
+| 配置参数                     | 参数说明                                                     |
+| ---------------------------- | ------------------------------------------------------------ |
+| mapreduce.map.maxattempts    | 每个Map Task最大重试次数，一旦重试参数超过该值，则认为Map Task运行失败，默认值：4。 |
+| mapreduce.reduce.maxattempts | 每个Reduce Task最大重试次数，一旦重试参数超过该值，则认为Map Task运行失败，默认值：4。 |
+| mapreduce.task.timeout       | Task超时时间，经常需要设置的一个参数，该参数表达的意思为：如果一个Task在一定时间内没有任何进入，即不会读取新的数据，也没有输出数据，则认为该Task处于Block状态，可能是卡住了，也许永远会卡住，为了防止因为用户程序永远Block住不退出，则强制设置了一个该超时时间（单位毫秒），默认是600000。如果你的程序对每条输入数据的处理时间过长（比如会访问数据库，通过网络拉取数据等），建议将该参数调大，该参数过小常出现的错误提示是“AttemptID:attempt_14267829456721_123456_m_000224_0 Timed out after  300 secsContainer killed by the ApplicationMaster.”。 |
+
+### 3. HDFS小文件优化方法
+
+#### 1. HDFS小文件弊端
+
+小文件过多时，NameNode上会产生很多索引文件。
+- 占用大量NameNode内存空间
+- 索引文件过大，导致索引速度变慢
+
+#### 2. HDFS小文件解决方案
+##### 方式
+- 数据采集阶段：将小文件或小批数据合成大文件再上传HDFS
+- 业务处理前：HDFS上使用MapReduce程序对小文件进行合并
+- MapReduce处理阶段：采用CombineTextInputFormat提高效率
+
+##### 方法
+###### 1. Hadoop Archive
+
+是一个高效地将小文件放入HDFS块中的文件存档工具，它能够将多个小文件打包成一个HAR文件，这样就减少了NameNode的内存使用。
+
+###### 2. Sequence File
+
+Sequence File由一系列的二进制key/value组成，如果key为文件名，value为文件内容，则可以将大批小文件合并成一个大文件。
+
+###### 3. CombineFileInputFormat（重要）
+
+ CombineFileInputFormat是一种新的InputFormat，用于将多个文件合并成一个单独的Split，另外，它会考虑数据的存储位置。
+
+###### 4. 开启JVM重用（重要）（还记得线程池吗？）
+
+一个Map（进程）运行在一个Jvm上，当其运行完毕后，container不销毁，container重复运行其他Map。
+
+效果：会减少45%运行时间
+
+设置方法：
+
+mapred-default.xml中有
+
+  ```
+  #值在10-20之间 默认是1
+  <property>
+    <name>mapreduce.job.jvm.numtasks</name>
+    <value>1</value>
+    <description>How many tasks to run per jvm. If set to -1, there is
+    no limit. 
+    </description>
+  </property>
+  ```
+
+- 一个Map就是一个进程
+- 一个进程就是一个jvm
+- 一个container就是一个jvm
+
+# 六、新特性
+
+## 1. 2.x新特性
+
+笔试可能会有（好多公司都是从网上down的笔试题）
+
+### 1. 集群间数据拷贝
+
+#### 1. scp实现两个远程主机之间的文件复制
+
+```shell
+$ scp -r hello.txt root@hadoop103:/user/atguigu/hello.txt		// 推 push
+$ scp -r root@hadoop103:/user/atguigu/hello.txt  hello.txt		// 拉 pull
+	
+	 //是通过本地主机中转实现两个远程主机的文件复制；如果在两个远程主机之间ssh没有配置的情况下可以使用该方式。
+$ scp -r root@hadoop103:/user/atguigu/hello.txt root@hadoop104:/user/atguigu  
+
+```
+
+#### 2. 采用distcp命令实现两个Hadoop集群之间的递归数据复制
+
+```shell
+[atguigu@hadoop102 hadoop-2.7.2]$  bin/hadoop distcp hdfs://hadoop102:8020/user/atguigu/hello.txt hdfs://hadoop105:8020/user/atguigu/hello.txt
+```
+
+### 2. 小文件存档
+
+#### HDFS存储小文件弊端
+
+每个文件均按块存储，每个块的元数据存储在NameNode的内存中，因此HDFS存储小文件会非常低效。因为大量的小文件会耗尽NameNode中的大部分内存。但注意，存储小文件所需要的磁盘容量和数据块的大小无关。例如，一个1MB的文件设置为128MB的块存储，实际使用的是1MB的磁盘空间，而不是128MB。
+
+#### 解决存储小文件办法之一
+
+HDFS存档文件或HAR文件，是一个更高效的文件存档工具，它将文件存入HDFS块，在减少NameNode内存使用的同时，允许对文件进行透明的访问。具体说来，HDFS存档文件对内还是一个一个独立文件，对NameNode而言却是一个整体，减少了NameNode的内存。
+
+![image-20200620200404777](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200620200404.png)
+
+#### 实操
+
+（1）需要启动YARN进程
+
+（2）归档文件
+
+```shell
+//把/user/atguigu/input目录里面的所有文件归档成一个叫input.har的归档文件，并把归档后文件存储到/user/atguigu/output路径下。
+
+[atguigu@hadoop102 hadoop-2.7.2]$ bin/hadoop archive -archiveName input.har -p  /user/atguigu/input   /user/atguigu/output
+```
+
+（3）查看归档
+
+```shell
+[atguigu@hadoop102 hadoop-2.7.2]$ hadoop fs -lsr /user/atguigu/output/input.har
+[atguigu@hadoop102 hadoop-2.7.2]$ hadoop fs -lsr har:///user/atguigu/output/input.har
+```
+
+（4）解归档文件
+
+```shell
+[atguigu@hadoop102 hadoop-2.7.2]$ hadoop fs -cp har:/// user/atguigu/output/input.har/*    /user/atguigu
+```
+
+
+
+### 3. 回收站
+
+开启回收站功能，可以将删除的文件在不超时的情况下，恢复原数据，起到防止误删除、备份等作用。
+
+#### 1. 回收站参数设置及工作机制
+
+##### 开启回收站功能参数配置
+
+1、默认值fs.trash.interval=0，0表示禁用回收站;其他值表示设置文件的存活时间。
+
+2、默认值fs.trash.checkpoint.interval=0，检查回收站的间隔时间。如果该值为0，则该值设置和fs.trash.interval的参数值相等。
+
+3、要求fs.trash.checkpoint.interval<=fs.trash.interval。
+
+##### 回收站工作机制
+
+![image-20200620195544522](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200620195544.png)
+
+#### 2. 启用回收站
+
+修改core-site.xml，配置垃圾回收时间为1分钟。
+
+修改访问垃圾回收站用户名称，默认是dr.who，修改为atguigu用户
+
+```xml
+<property>
+   <name>fs.trash.interval</name>
+	<value>1</value>
+</property>
+
+<property>
+  <name>hadoop.http.staticuser.user</name>
+  <value>atguigu</value>
+</property>
+```
+
+#### 3. 查看回收站
+
+回收站在集群中的路径：/user/atguigu/.Trash/….
+
+#### 4. 通过程序删除的文件不会经过回收站，需要调用moveToTrash()才进入回收站
+
+```java
+Trash trash = New Trash(conf);
+trash.moveToTrash(path);
+```
+
+#### 5. 恢复回收站数据
+
+```shell
+[atguigu@hadoop102 hadoop-2.7.2]$ hadoop fs -mv
+/user/atguigu/.Trash/Current/user/atguigu/input    /user/atguigu/input
+```
+
+#### 6. 清空回收站
+
+```shell
+[atguigu@hadoop102 hadoop-2.7.2]$ hadoop fs -expunge
+```
+
+## 2. 3.x新特性
+
+### 1. 多NN的HA架构
+
+（具体后面讲Hadoop HA高可用时会讲。）
+
+允许用户运行多个备用NameNode。备用NN充当2NN，当NN挂了备胎马上上岗。
+
+例如，通过配置三个NameNode和五个JournalNode，群集能够容忍两个节点而不是一个节点的故障。
+
+### 2. 纠删码
+
+ HDFS中的默认3副本方案在存储空间和其他资源（例如，网络带宽）中具有200％的开销。但是，对于I / O活动相对较低暖和冷数据集，在正常操作期间很少访问其他块副本，但仍会消耗与第一个副本相同的资源量。
+
+三个副本a.txt，一个1M，三个就3M，一般只读其中一个，另外两个就是200%，很少使用。
+
+纠删码（Erasure Coding）能够在不到50% 的数据冗余情况下提供和3副本相同的容错能力，即不需要存另外两个2M，会小许多。
+
+因此，使用纠删码作为副本机制的改进是自然而然的。
+
+### 3. 2.x和3.x的区别
+
+- 端口号和3.x不太一样。
+
+- workers/slaves  是 2.x/3.x的区别
+
+- 群起的方式不太一样
+
+  
+
+zookeeper  ha  flume  kafka  hbase  数仓    ---离线
