@@ -2825,6 +2825,8 @@ $ mycluster start
 
 # 三、MapReduce
 
+面试的时候一般没人问，实际工作中也不会用直接用MapReduce来处理数据。但是要好好的了解这个思想，这是学习大数据的基石。
+
 ## 1. MapReduce概述
 
 ### 1. 定义

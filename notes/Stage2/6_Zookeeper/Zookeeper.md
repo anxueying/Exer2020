@@ -1113,7 +1113,7 @@ Zookeeper自己维护的id，我们也看不到。只能新创建一个节点看
 
 （2）角色：Leader和Follower
 
-（3）集群最少需要机器数：3
+（3）集群最少需要机器数：3（最小的奇数-除1外-是3，4台也要起3台才行）
 
 ## 4. ZooKeeper的常用命令
 
@@ -1207,7 +1207,9 @@ Zookeeper构造器
     
     
     public void start() {
+        //通信
         sendThread.start();
+        //监听
         eventThread.start();
     }
 
