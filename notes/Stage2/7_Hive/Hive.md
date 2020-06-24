@@ -112,7 +112,7 @@ HQL Hive Query language
 | 查询语言 | 类SQL                                                    | SQL                                                          |
 | 数据更新 | 读多写少，不支持delete,update，不建议insert              | 经常修改                                                     |
 | 执行延迟 | 延迟高  1.没有索引，查询扫描整表  2. 底层MapReduce延迟高 | 延迟低，但数据规模大道超过其处理能力的时候，hive的并行计算就体现出优势了 |
-|          | 利用MapReduce并行计算，支持大规模数据                    | 小规模数据                                                   |
+| 数据规模 | 利用MapReduce并行计算，支持大规模数据                    | 小规模数据                                                   |
 
 
 
@@ -342,42 +342,49 @@ mysql> quit
 
 ## 3. Hive安装部署
 
-**1****）****把****apache-hive-3.1.2-bin.tar.gz****上传到****linux****的****/opt/software****目录下**
+1）把apache-hive-3.1.2-bin.tar.gz上传到linux的/opt/software目录下
 
-**2****）****解压****apache-hive-3.1.2-bin.tar.gz****到****/opt/module/****目录下面**
+2）解压apache-hive-3.1.2-bin.tar.gz到/opt/module/目录下面
 
+```shell
 [atguigu@hadoop102 software]$ tar -zxvf /opt/software/apache-hive-3.1.2-bin.tar.gz -C /opt/module/
-
-**3****）****修改****apache-hive-3.1.2-bin.tar.gz****的名称为****hive**
-
-[atguigu@hadoop102 software]$ mv /opt/module/apache-hive-3.1.2-bin/ /opt/module/hive
-
-**4****）****修改****/etc/profile.d/my_env.sh****，****添加环境变量**
-
-[atguigu@hadoop102 software]$ sudo vim /etc/profile.d/my_env.sh
-
 ```
+
+3）修改apache-hive-3.1.2-bin.tar.gz的名称为hive
+
+```shell
+[atguigu@hadoop102 module]$ mv apache-hive-3.1.2-bin/   hive
+```
+
+4）修改/etc/profile.d/my_env.sh，添加环境变量
+
+```shell
+[atguigu@hadoop102 software]$ sudo vim /etc/profile.d/my_env.sh
+```
+
+
+
+```shell
 #HIVE_HOME
-
 export HIVE_HOME=/opt/module/hive
-
 export PATH=$PATH:$HIVE_HOME/bin
 ```
 
+5）重新加载环境变量，并确认成功
 
-
-```
+```shell
 [atguigu@hadoop102 module]$ source /etc/profile.d/my_env.sh 
+# 输出/opt/module/hive即为成功
 [atguigu@hadoop102 module]$ echo $HIVE_HOME
 /opt/module/hive
 ```
 
-**6****）****解决日志****Jar****包冲突**
+6）解决日志Jar包冲突
 
-hadoop和hive之间的版本冲突
+hadoop和hive之间的log4j版本冲突，要把hive中lib中的jar包名字改一下，无法启用即可。就直接在文件名后加.bak即可。
 
 ```shell
-[atguigu@hadoop102 software]$ mv $HIVE_HOME/lib/log4j-slf4j-impl-2.10.0.jar $HIVE_HOME/lib/log4j-slf4j-impl-2.10.0.jar.bak
+[atguigu@hadoop102 lib]$ mv log4j-slf4j-impl-2.10.0.jar log4j-slf4j-impl-2.10.0.jar.bak
 
 [atguigu@hadoop102 lib]$ ll | grep log4j
 -rw-rw-r--. 1 atguigu atguigu    63835 4月  15 00:34 log4j-1.2-api-2.10.0.jar
@@ -386,12 +393,6 @@ hadoop和hive之间的版本冲突
 -rw-rw-r--. 1 atguigu atguigu    24173 4月  15 00:24 log4j-slf4j-impl-2.10.0.jar.bak
 -rw-rw-r--. 1 atguigu atguigu    32060 4月  15 00:34 log4j-web-2.10.0.jar
 ```
-
-
-
-
-
-
 
 ## 4. Hive元数据配置到MySQL
 
@@ -606,6 +607,8 @@ which: no hbase in (/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/opt/modul
 
 ```shell
 [atguigu@hadoop202 hive]$ nohup hive --service hiveserver2>log.txt 2>&1 &
+#不加log.txt nohup会自动生成一个nohup.out 所有服务控制台输入都会在这里，不推荐。。因为这样的日志太乱了
+[atguigu@hadoop202 hive]$ nohup hive --service hiveserver2 2>&1 &
 ```
 
  错误输出给标准输出，标准输出给log.txt,就不在控制台输出了。而是写到log.txt中。
@@ -627,6 +630,8 @@ which: no hbase in (/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/opt/modul
 &: 放在命令结尾,表示后台运行
 
 ##### 5. 编写hive服务启动脚本
+
+
 
 ```shell
 #$HIVE_HOME/bin目录下写脚本
@@ -712,25 +717,522 @@ $ mycluster start
 $ hs.sh start
 ```
 
+启动并查看状态
+
+```shell
+[atguigu@hadoop102 ~]$ hs.sh start
+#马上看status是异常的，要等个1-2分钟
+[atguigu@hadoop102 ~]$ hs.sh status
+Metastore服务运行正常
+HiveServer2服务运行异常
+[atguigu@hadoop102 bin]$ hs.sh status
+Metastore服务运行正常
+HiveServer2服务运行正常
+```
+
+
+
 ### 3. HiveJDBC访问
+
+#### 自带beeline（客户端）访问
+
+需要连hiveserver2
+
+```shell
+#必须用atguigu访问，因为jdbc的管理员是atguigu，不然没权限
+[atguigu@hadoop102 bin]$ beeline -u jdbc:hive2://hadoop102:10000 -n atguigu
+Connecting to jdbc:hive2://hadoop102:10000
+Connected to: Apache Hive (version 3.1.2)
+Driver: Hive JDBC (version 3.1.2)
+Transaction isolation: TRANSACTION_REPEATABLE_READ
+Beeline version 3.1.2 by Apache Hive
+#进入到hadoop客户端
+0: jdbc:hive2://hadoop102:10000> show databases;
+INFO  : Compiling command(queryId=atguigu_20200624090544_e785ed6a-d1a1-404c-91ab-e6b85449c49d): show databases
+INFO  : Concurrency mode is disabled, not creating a lock manager
+INFO  : Semantic Analysis Completed (retrial = false)
+INFO  : Returning Hive schema: Schema(fieldSchemas:[FieldSchema(name:database_name, type:string, comment:from deserializer)], properties:null)
+INFO  : Completed compiling command(queryId=atguigu_20200624090544_e785ed6a-d1a1-404c-91ab-e6b85449c49d); Time taken: 0.608 seconds
+INFO  : Concurrency mode is disabled, not creating a lock manager
+INFO  : Executing command(queryId=atguigu_20200624090544_e785ed6a-d1a1-404c-91ab-e6b85449c49d): show databases
+INFO  : Starting task [Stage-0:DDL] in serial mode
+INFO  : Completed executing command(queryId=atguigu_20200624090544_e785ed6a-d1a1-404c-91ab-e6b85449c49d); Time taken: 0.02 seconds
+INFO  : OK
+INFO  : Concurrency mode is disabled, not creating a lock manager
++----------------+
+| database_name  |
++----------------+
+| default        |
++----------------+
+1 row selected (1.099 seconds)
+#退出
+0: jdbc:hive2://hadoop102:10000> !quit
+```
 
 ### 4. Hive访问
 
+#### 自带hive（脚本）访问
+
+不连hiveserver2
+
+```shell
+#进入
+[atguigu@hadoop102 ~]$ hive
+which: no hbase in (/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/opt/module/jdk1.8.0_212/bin:/opt/module/hadoop-3.1.3/bin:/opt/module/hadoop-3.1.3/sbin:/opt/module/zookeeper-3.5.7/bin:/opt/module/hive/bin:/home/atguigu/.local/bin:/home/atguigu/bin)
+Hive Session ID = ede63f3a-17ad-43c5-873d-a5e21b9d2943
+
+Logging initialized using configuration in jar:file:/opt/module/hive/lib/hive-common-3.1.2.jar!/hive-log4j2.properties Async: true
+Hive-on-MR is deprecated in Hive 2 and may not be available in the future versions. Consider using a different execution engine (i.e. spark, tez) or using Hive 1.X releases.
+Hive Session ID = 41e6acb4-0400-4f03-8a91-14e0428967ca
+hive> show databases;
+OK
+default
+Time taken: 0.4 seconds, Fetched: 1 row(s)
+#退出
+hive> quit;
+```
+
+**优化：打印 当前库 和 表头**
+
+```shell
+[atguigu@hadoop102 conf]$ vim hive-site.xml 
+[atguigu@hadoop102 conf]$ hs.sh restart
+[atguigu@hadoop102 conf]$ hs.sh status
+Metastore服务运行正常
+HiveServer2服务运行正常
+```
+
+在hive-site.xml中加入如下两个配置: 
+
+```xml
+<property>
+    <name>hive.cli.print.header</name>
+    <value>true</value>
+    <description>Whether to print the names of the columns in query output.</description>
+  </property>
+   <property>
+    <name>hive.cli.print.current.db</name>
+    <value>true</value>
+    <description>Whether to include the current database in the Hive prompt.</description>
+  </property>
+```
+
+更新了配置要重启hive服务，再次进入hive
+
+```shell
+# default 当前库
+hive (default)> show databases;
+OK
+# 表头
+database_name
+default
+Time taken: 0.403 seconds, Fetched: 1 row(s)
+```
+
+### 5. 历史记录
+
+#### .beeline/history
+
+beeline的history在这里，quit之后会都写在这里
+
+#### .hivehistory
+
+通过hive脚本登录的各种语句，quit之后会都写在这里
+
+![image-20200624095611132](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200624095611.png)
+
 ## 6. Hive常用交互命令
 
-## 7. Hive其他命令操作
+使用场景：脚本里一般会这样用，因为不能人为的进入hive客户端写sql
 
-## 8. Hive常见属性配置
+### help
+
+```shell
+[atguigu@hadoop102 conf]$ hive -help
+which: no hbase in (/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/opt/module/jdk1.8.0_212/bin:/opt/module/hadoop-3.1.3/bin:/opt/module/hadoop-3.1.3/sbin:/opt/module/zookeeper-3.5.7/bin:/opt/module/hive/bin:/home/atguigu/.local/bin:/home/atguigu/bin)
+Hive Session ID = d371508f-4fc2-400d-9f7d-defacdd5ae2e
+usage: hive
+ -d,--define <key=value>          Variable substitution to apply to Hive
+                                  commands. e.g. -d A=B or --define A=B
+    --database <databasename>     Specify the database to use
+ -e <quoted-query-string>         SQL from command line
+ -f <filename>                    SQL from files
+ -H,--help                        Print help information
+    --hiveconf <property=value>   Use value for given property
+    --hivevar <key=value>         Variable substitution to apply to Hive
+                                  commands. e.g. --hivevar A=B
+ -i <filename>                    Initialization SQL file
+ -S,--silent                      Silent mode in interactive shell
+ -v,--verbose                     Verbose mode (echo executed SQL to the
+                                  console)
+
+```
+
+建表，插入数据
+
+```sql
+#创建一个表
+hive (default)> create table student(id int,name string);
+OK
+Time taken: 1.273 seconds
+hive (default)> show tables;
+OK
+tab_name
+student
+Time taken: 0.095 seconds, Fetched: 1 row(s)
+hive (default)> select * from student;
+OK
+student.id	student.name
+Time taken: 1.229 seconds
+#插入数据，真的好慢
+hive (default)> insert into table student values(1,'zhangsan');
+Query ID = atguigu_20200624091749_ccaf9c2a-10c2-45d2-9f40-7d2461a2dd36
+Total jobs = 3
+Launching Job 1 out of 3
+Number of reduce tasks determined at compile time: 1
+In order to change the average load for a reducer (in bytes):
+  set hive.exec.reducers.bytes.per.reducer=<number>
+In order to limit the maximum number of reducers:
+  set hive.exec.reducers.max=<number>
+In order to set a constant number of reducers:
+  set mapreduce.job.reduces=<number>
+Starting Job = job_1592960358915_0001, Tracking URL = http://hadoop103:8088/proxy/application_1592960358915_0001/
+Kill Command = /opt/module/hadoop-3.1.3/bin/mapred job  -kill job_1592960358915_0001
+Hadoop job information for Stage-1: number of mappers: 1; number of reducers: 1
+2020-06-24 09:17:58,298 Stage-1 map = 0%,  reduce = 0%
+2020-06-24 09:18:02,483 Stage-1 map = 100%,  reduce = 0%, Cumulative CPU 4.0 sec
+2020-06-24 09:18:06,569 Stage-1 map = 100%,  reduce = 100%, Cumulative CPU 5.35 sec
+MapReduce Total cumulative CPU time: 5 seconds 350 msec
+Ended Job = job_1592960358915_0001
+Stage-4 is selected by condition resolver.
+Stage-3 is filtered out by condition resolver.
+Stage-5 is filtered out by condition resolver.
+Moving data to directory hdfs://hadoop102:9820/user/hive/warehouse/student/.hive-staging_hive_2020-06-24_09-17-49_291_71007690541847048-1/-ext-10000
+Loading data to table default.student
+MapReduce Jobs Launched: 
+Stage-Stage-1: Map: 1  Reduce: 1   Cumulative CPU: 5.35 sec   HDFS Read: 15275 HDFS Write: 245 SUCCESS
+Total MapReduce CPU Time Spent: 5 seconds 350 msec
+OK
+col1	col2
+Time taken: 18.891 seconds
+```
+
+### -e sql语句
+
+```shell
+# 直接跟sql语句
+[atguigu@hadoop102 datas]$ hive -e 'select * from student;'
+which: no hbase in (/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/opt/module/jdk1.8.0_212/bin:/opt/module/hadoop-3.1.3/bin:/opt/module/hadoop-3.1.3/sbin:/opt/module/zookeeper-3.5.7/bin:/opt/module/hive/bin:/home/atguigu/.local/bin:/home/atguigu/bin)
+Hive Session ID = ba3a8903-ebb4-4637-89d0-15389de0fb55
+
+Logging initialized using configuration in jar:file:/opt/module/hive/lib/hive-common-3.1.2.jar!/hive-log4j2.properties Async: true
+Hive Session ID = a76428c9-d789-48ee-aab1-5bf34286fc22
+OK
+student.id	student.name
+1	zhangsan
+Time taken: 1.647 seconds, Fetched: 1 row(s)
+```
+
+### -f sql文件
+
+```shell
+# 用文件里放命令
+[atguigu@hadoop102 datas]$ hive -f ./stu.sql 
+which: no hbase in (/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/opt/module/jdk1.8.0_212/bin:/opt/module/hadoop-3.1.3/bin:/opt/module/hadoop-3.1.3/sbin:/opt/module/zookeeper-3.5.7/bin:/opt/module/hive/bin:/home/atguigu/.local/bin:/home/atguigu/bin)
+Hive Session ID = 8fc4d533-e515-4718-8db6-5d667c734615
+
+Logging initialized using configuration in jar:file:/opt/module/hive/lib/hive-common-3.1.2.jar!/hive-log4j2.properties Async: true
+Hive Session ID = ef49eca7-17bb-4544-a212-bf1899c213d3
+OK
+student.id	student.name
+1	zhangsan
+Time taken: 1.621 seconds, Fetched: 1 row(s)
+# 把结果保存
+[atguigu@hadoop102 datas]$ hive -f ./stu.sql > stu.txt
+which: no hbase in (/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/opt/module/jdk1.8.0_212/bin:/opt/module/hadoop-3.1.3/bin:/opt/module/hadoop-3.1.3/sbin:/opt/module/zookeeper-3.5.7/bin:/opt/module/hive/bin:/home/atguigu/.local/bin:/home/atguigu/bin)
+Hive Session ID = 63dfeb0f-a692-4585-9ffe-e3cc3c67bb63
+
+Logging initialized using configuration in jar:file:/opt/module/hive/lib/hive-common-3.1.2.jar!/hive-log4j2.properties Async: true
+Hive Session ID = 7470076e-24ad-4bde-9005-b441d09da248
+OK
+Time taken: 1.698 seconds, Fetched: 1 row(s)
+# 看一下结果
+[atguigu@hadoop102 datas]$ cat stu.txt 
+student.id	student.name
+1	zhangsan
+```
+
+### 查看hdfs路径
+
+```shell
+#hadoop的操作
+[atguigu@hadoop102 datas]$ hadoop fs -ls /
+Found 4 items
+drwxr-xr-x   - atguigu supergroup          0 2020-06-16 19:23 /input
+drwxr-xr-x   - atguigu supergroup          0 2020-06-20 10:57 /output
+drwx------   - atguigu supergroup          0 2020-06-24 09:00 /tmp
+drwxr-xr-x   - atguigu supergroup          0 2020-06-24 09:17 /user
+[atguigu@hadoop102 datas]$ hdfs dfs -ls /
+Found 4 items
+drwxr-xr-x   - atguigu supergroup          0 2020-06-16 19:23 /input
+drwxr-xr-x   - atguigu supergroup          0 2020-06-20 10:57 /output
+drwx------   - atguigu supergroup          0 2020-06-24 09:00 /tmp
+drwxr-xr-x   - atguigu supergroup          0 2020-06-24 09:17 /user
+
+```
+
+hive中也可查看：
+
+```
+0: jdbc:hive2://hadoop102:10000> dfs -ls /;
++----------------------------------------------------+
+|                     DFS Output                     |
++----------------------------------------------------+
+| Found 4 items                                      |
+| drwxr-xr-x   - atguigu supergroup          0 2020-06-16 19:23 /input |
+| drwxr-xr-x   - atguigu supergroup          0 2020-06-20 10:57 /output |
+| drwx------   - atguigu supergroup          0 2020-06-24 09:00 /tmp |
+| drwxr-xr-x   - atguigu supergroup          0 2020-06-24 09:17 /user |
++----------------------------------------------------+
+5 rows selected (0.027 seconds)
+
+```
+
+## 7. Hive常见属性配置
 
 ### 1. Hive运行日志信息配置
 
+我们用后台启动脚本写的运行日志脚本在这里
+
+```shell
+[atguigu@hadoop102 logs]$ ll
+总用量 8
+-rw-rw-r--. 1 atguigu atguigu 3140 6月  24 09:54 hiveServer2.log
+-rw-rw-r--. 1 atguigu atguigu   52 6月  24 09:11 metastore.log
+[atguigu@hadoop102 logs]$ pwd
+/opt/module/hive/logs
+```
+
+现在我们要把hive本身的运行日志也放到这个目录里
+
+1）Hive的log默认存放在`/tmp/atguigu/hive.log`目录下（当前用户名下）
+2）修改hive的log存放日志到`/opt/module/hive/logs`
+（1）修改`$HIVE_HOME/conf/hive-log4j.properties.template`文件名称为`hive-log4j.properties`
+
+```shell
+[atguigu@hadoop102 conf]$ mv hive-log4j2.properties.template hive-log4j.properties
+[atguigu@hadoop102 conf]$ vim hive-log4j.properties 
+```
+
+（2）在hive-log4j.properties文件中修改log存放位置
+
+```properties
+hive.log.dir=/opt/module/hive/logs
+```
+
+重启hive（也可都配置完后重启）。
+
 ### 2. Hive启动jvm堆内存设置
+
+新版本的hive启动的时候，默认申请的jvm堆内存大小为256M，jvm堆内存申请的太小，导致后期开启本地模式，执行复杂的sql时经常会报错：`java.lang.OutOfMemoryError: Java heap space`，因此最好提前调整一下`HADOOP_HEAPSIZE`这个参数。
+
+```shell
+[atguigu@hadoop102 conf]$ cp hive-env.sh.template hive-env.sh
+[atguigu@hadoop102 conf]$ vim hive-env.sh
+```
+
+ 将hive-env.sh其中的参数 `export HADOOP_HEAPSIZE=1024`的注释放开，重启hive。
 
 ### 3. 参数配置方式
 
+优先级依次递增。即**配置文件<命令行参数<参数声明**。（谁最后设的谁生效！）
 
+注意某些**系统级的参数**，例如**log4j相关的设定，必须用前两种方式设定，因为那些参数的读取在会话建立以前已经完成了**。
+
+#### 1. 配置文件方式（永久）
+
+用户自定义配置会覆盖默认配置。另外，Hive也会读入Hadoop的配置，因为Hive是作为Hadoop的客户端启动的，Hive的配置会覆盖Hadoop的配置。
+
+**配置文件的设定对本机启动的所有Hive进程都有效。**
+
+- 默认配置文件：hive-default.xml
+
+- 用户自定义配置文件：hive-site.xml
+
+#### 2. 命令行参数方式（只针对当前客户端连接）
+
+启动Hive时，可以在命令行添加-hiveconf param=value来设定参数。
+
+**仅对本次hive启动有效。**
+
+hive命令行
+
+```shell
+[atguigu@hadoop103 hive]$ hive -hiveconf mapred.reduce.tasks=10;
+```
+
+beeline客户端
+```shell
+[atguigu@hadoop103 hive]$ beeline -u jdbc:hive2://hadoop102:10000 -n atguigu -hiveconf mapred.reduce.tasks=10;
+```
+
+##### 查看
+
+进入hive或beeline后，查看的语法是一样的
+
+```shell
+hive (default)> set mapred.reduce.tasks;
+```
+
+#### 3. 参数声明方式（只针对当前客户端连接）
+
+可以在HQL中使用SET关键字设定参数
+
+**仅对本次hive启动有效。**
+
+##### 设定参数
+
+```
+hive (default)> set mapred.reduce.tasks=100;
+```
+
+##### 查看参数设置
+
+```sql
+0: jdbc:hive2://hadoop102:10000> set hive.metastore.schema.verification;
++-------------------------------------------+
+|                    set                    |
++-------------------------------------------+
+| hive.metastore.schema.verification=false  |
++-------------------------------------------+
+1 row selected (0.011 seconds)
+```
+
+## 8. 图形化连接hive3
+
+### 1. DBeaver7.1.0
+
+1. 新建连接
+
+![image-20200624105131614](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200624105131.png)
+
+2. 把linux上/opt/module/hive/jdbc目录中的jar包下载下来
+
+   （不想下载的话直接按dbeaver提示下载也可，前提是网速好一点）
+
+   ```shell
+   $ sz hive-jdbc-3.1.2-standalone.jar 
+   ```
+
+   放到dbeaver安装目录中
+
+3. 配置连接参数
+
+   ![image-20200624105441761](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200624105441.png)
+
+4. 编辑驱动
+
+   ![image-20200624105702379](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200624105702.png)
+
+5. 测试连接，成功后即可看到
+
+![image-20200624105750769](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200624105750.png)
+
+### 2. IDEA
+
+1. 新建连接
+
+![image-20200624104643185](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200624104643.png)
+
+2. 配置参数
+
+![image-20200624104824386](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200624104824.png)
+
+如果不想下载还是可以自己从本地配置驱动
+
+![image-20200624122418675](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200624122418.png)
+
+3. 测试连接没问题后，点击ok即可
+
+![image-20200624104909464](https://img-1258293749.cos.ap-chengdu.myqcloud.com/20200624104909.png)
 
 # 三、 Hive数据类型
+
+## 1. 基本数据类型
+
+| HIVE       | MySQL       | JAVA    | 长度                                                         | 例子                                   |
+| ---------- | ----------- | ------- | ------------------------------------------------------------ | -------------------------------------- |
+| TINYINT    | TINYINT     | byte    | 1byte有符号整数                                              | 20                                     |
+| SMALINT    | SMALINT     | short   | 2byte有符号整数                                              | 20                                     |
+| **INT**    | INT         | int     | 4byte有符号整数                                              | 20                                     |
+| **BIGINT** | BIGINT      | long    | 8byte有符号整数                                              | 20                                     |
+| BOOLEAN    | **无**      | boolean | 布尔类型，true或者false                                      | TRUE FALSE                             |
+| FLOAT      | FLOAT       | float   | 单精度浮点数                                                 | 3.14159                                |
+| **DOUBLE** | DOUBLE      | double  | 双精度浮点数                                                 | 3.14159                                |
+| **STRING** | **VARCHAR** | string  | 字符系列。可以指定字符集。可以使用单引号或者双引号。理论上它可以存储2GB的字符数 | ‘now is the time’   “for all good men” |
+| TIMESTAMP  | TIMESTAMP   |         | 时间类型                                                     |                                        |
+| BINARY     | BINARY      |         | 字节数组                                                     |                                        |
+
+## 2. 集合数据类型
+
+map中每一个k的含义是一样的，每一个v的含义是一样的
+
+struct中有很多个map的value，每一个map的业务含义都不同。可以这样理解
+
+| 数据类型 | 描述                                                         | 语法示例                                                     |
+| -------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| STRUCT   | 和c语言中的struct类似，都可以通过“点”符号访问元素内容。例如，如果某个列的数据类型是STRUCT{first STRING, mid  STRING,last int},那么第1个元素可以通过字段.first来引用。2 | struct()  例如  struct<street:string,  city:string,email:int> |
+| MAP      | MAP是一组键-值对元组集合，使用数组表示法可以访问数据。例如，如果某个列的数据类型是MAP，其中键->值对是’first’->’John’和’last’->’Doe’，那么可以通过字段名[‘last’]获取最后一个元素 | map()  例如map<string, int>                                  |
+| ARRAY    | 数组是一组具有相同类型和名称的变量的集合。这些变量称为数组的元素，每个数组元素都有一个编号，编号从零开始。例如，数组值为[‘John’, ‘Doe’]，那么第2个元素可以通过数组名[1]进行引用。 | Array()  例如array<string>                                   |
+
+### 实操
+
+测试数据
+
+```
+songsong,bingbing_lili,xiao song:18_xiaoxiao song:19,hui long guan_beijing_10010
+yangyang,caicai_susu,xiao yang:18_xiaoxiao yang:19,chao yang_beijing_10011
+```
+
+创建测试表 7-10列分别为 
+
+- 字段（列）分隔符
+- 元素分隔符（如array中每一个元素，map中每一个键值对，struct中每一个value）
+- 键值对分隔符（map中）
+- 行分隔符
+
+```sql
+create table test(
+name string,
+friends array<string>,
+childrens map<string,int>,
+address struct<street:string,city:string,email:int>
+)
+row format delimited fields terminated by ','
+collection items terminated by '_'
+map keys terminated by ':'
+lines terminated by '\n'
+;
+```
+
+导入文本数据到测试表
+
+```sql
+hive (default)> load data local inpath '/opt/module/hive/datas/test.txt' into table test;
+```
+
+查询三种集合列里的数据，以下分别是ARRAY，MAP，STRUCT的访问方式
+
+```sql
+hive (default)> select friends[1],children['xiao song'],address.city from test
+where name="songsong";
+OK
+_c0     _c1     city
+lili    18      beijing
+Time taken: 0.076 seconds, Fetched: 1 row(s)
+```
+
+
 
 # 四、DDL数据定义
 
